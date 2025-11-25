@@ -1,0 +1,325 @@
+import { BrickCard } from '../BrickCard';
+import { mockCurrentUser, mockPlaylists } from '../../data/mockData';
+import { Grid3x3, Orbit } from 'lucide-react';
+import { useState } from 'react';
+
+interface ProfileScreenProps {
+  onPlaylistClick: (playlistId: string) => void;
+}
+
+export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
+  const userPlaylists = mockPlaylists;
+  const [layoutMode, setLayoutMode] = useState<'brick' | 'spiral'>('brick');
+
+  // Get dynamic size based on structural integrity
+  const getCardSize = (structuralIntegrity: number | undefined): 'small' | 'medium' | 'large' => {
+    if (!structuralIntegrity) return 'medium';
+    if (structuralIntegrity >= 85) return 'large';
+    if (structuralIntegrity >= 70) return 'medium';
+    return 'small';
+  };
+
+  // Render bricks in spiral layout
+  const renderSpiralLayout = (playlists: any[]) => {
+    const sorted = [...playlists].sort((a, b) => 
+      (b.structuralIntegrity || 0) - (a.structuralIntegrity || 0)
+    );
+
+    return (
+      <div 
+        className="relative rounded-2xl mb-6 overflow-hidden flex items-center justify-center"
+        style={{ 
+          minHeight: '800px',
+          backgroundColor: '#151515',
+          border: '1px solid #333333',
+        }}
+      >
+        {/* Concentric Circles */}
+        {[150, 300, 450].map((size, i) => (
+          <div
+            key={i}
+            className="absolute rounded-full"
+            style={{
+              width: `${size}px`,
+              height: `${size}px`,
+              border: '1px solid rgba(211, 47, 47, 0.15)',
+              left: '50%',
+              top: '50%',
+              transform: 'translate(-50%, -50%)',
+            }}
+          />
+        ))}
+
+        {/* Center Album (Highest Integrity) */}
+        {sorted[0] && (
+          <div
+            className="absolute cursor-pointer group"
+            style={{
+              left: '50%',
+              top: '50%',
+              transform: 'translate(-50%, -50%)',
+            }}
+            onClick={() => onPlaylistClick(sorted[0].id)}
+          >
+            <img
+              src={sorted[0].coverImage}
+              alt={sorted[0].name}
+              className="rounded-xl transition-all duration-300 group-hover:scale-110"
+              style={{
+                width: '140px',
+                height: '140px',
+                objectFit: 'cover',
+                boxShadow: '0 0 40px rgba(211, 47, 47, 0.6)',
+                border: '3px solid #d32f2f',
+              }}
+            />
+            {/* Tooltip */}
+            <div
+              className="absolute -bottom-12 left-1/2 -translate-x-1/2 px-3 py-2 rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+              style={{
+                backgroundColor: '#252525',
+                border: '1px solid #333333',
+              }}
+            >
+              <p className="mono" style={{ color: '#e0e0e0', fontSize: '0.75rem' }}>
+                {sorted[0].name}
+              </p>
+              <p className="mono" style={{ color: '#d32f2f', fontSize: '0.7rem' }}>
+                {sorted[0].structuralIntegrity}% Integrity
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Orbiting Albums */}
+        {sorted.slice(1).map((playlist, index) => {
+          const integrity = playlist.structuralIntegrity || 50;
+          const size = integrity >= 85 ? 100 : integrity >= 70 ? 80 : 60;
+          
+          const totalItems = sorted.length - 1;
+          const angle = (index / totalItems) * Math.PI * 2;
+          const orbitRadius = integrity >= 85 ? 150 : integrity >= 70 ? 220 : 290;
+          const x = 50 + Math.cos(angle) * (orbitRadius / 8);
+          const y = 50 + Math.sin(angle) * (orbitRadius / 8);
+
+          return (
+            <div
+              key={playlist.id}
+              className="absolute cursor-pointer group"
+              style={{
+                left: `${x}%`,
+                top: `${y}%`,
+                transform: 'translate(-50%, -50%)',
+              }}
+              onClick={() => onPlaylistClick(playlist.id)}
+            >
+              {/* Pulse Effect */}
+              <div
+                className="absolute inset-0 rounded-lg animate-ping"
+                style={{
+                  backgroundColor: 'rgba(211, 47, 47, 0.2)',
+                  width: `${size}px`,
+                  height: `${size}px`,
+                  left: '50%',
+                  top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                }}
+              />
+              
+              {/* Album Image */}
+              <img
+                src={playlist.coverImage}
+                alt={playlist.name}
+                className="relative rounded-lg transition-all duration-300 group-hover:scale-125"
+                style={{
+                  width: `${size}px`,
+                  height: `${size}px`,
+                  objectFit: 'cover',
+                  border: '2px solid #d32f2f',
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.6)',
+                }}
+              />
+
+              {/* Tooltip */}
+              <div
+                className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50"
+                style={{
+                  backgroundColor: '#252525',
+                  border: '1px solid #333333',
+                }}
+              >
+                <p className="mono" style={{ color: '#e0e0e0', fontSize: '0.7rem' }}>
+                  {playlist.name}
+                </p>
+                <p className="mono" style={{ color: '#d32f2f', fontSize: '0.65rem' }}>
+                  {integrity}% Integrity
+                </p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  return (
+    <div className="pb-24 px-6 pt-6 md:pt-16">
+      {/* Profile Header */}
+      <div className="mb-8 text-center">
+        <img
+          src={mockCurrentUser.avatar}
+          alt={mockCurrentUser.name}
+          className="w-24 h-24 rounded-full mx-auto mb-4"
+          style={{
+            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
+          }}
+        />
+        <h2 className="mb-1">{mockCurrentUser.name}</h2>
+        <p style={{ color: '#a0a0a0' }}>{mockCurrentUser.tier} Tier</p>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 gap-4 mb-8">
+        {/* Diversity Score */}
+        <div
+          className="p-6 rounded-lg text-center"
+          style={{
+            backgroundColor: '#252525',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+            border: '1px solid rgba(255, 255, 255, 0.05)',
+          }}
+        >
+          <div className="relative inline-block mb-3">
+            {/* Ring Chart */}
+            <svg width="80" height="80" className="transform -rotate-90">
+              <circle
+                cx="40"
+                cy="40"
+                r="35"
+                stroke="#1a1a1a"
+                strokeWidth="8"
+                fill="none"
+              />
+              <circle
+                cx="40"
+                cy="40"
+                r="35"
+                stroke="url(#diversity-gradient)"
+                strokeWidth="8"
+                fill="none"
+                strokeDasharray={`${(mockCurrentUser.diversityScore / 100) * 220} 220`}
+                strokeLinecap="round"
+              />
+              <defs>
+                <linearGradient id="diversity-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#4caf50" />
+                  <stop offset="100%" stopColor="#546e7a" />
+                </linearGradient>
+              </defs>
+            </svg>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="mono" style={{ color: '#e0e0e0', fontSize: '1.5rem' }}>
+                {mockCurrentUser.diversityScore}
+              </span>
+            </div>
+          </div>
+          <h4 style={{ color: '#e0e0e0' }}>Authenticity</h4>
+          <p className="mono" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
+            Diversity Score
+          </p>
+        </div>
+
+        {/* Connection Cap */}
+        <div
+          className="p-6 rounded-lg text-center"
+          style={{
+            backgroundColor: '#252525',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+            border: '1px solid rgba(255, 255, 255, 0.05)',
+          }}
+        >
+          <div className="mb-3">
+            <span className="mono" style={{ color: '#e0e0e0', fontSize: '2rem' }}>
+              {mockCurrentUser.connectionsUsed}
+            </span>
+            <span className="mono" style={{ color: '#a0a0a0', fontSize: '1.2rem' }}>
+              /{mockCurrentUser.connectionsMax}
+            </span>
+          </div>
+          <h4 style={{ color: '#e0e0e0' }}>Connections</h4>
+          <div className="flex justify-center gap-1 mt-2">
+            {Array.from({ length: mockCurrentUser.connectionsMax }).map((_, i) => (
+              <div
+                key={i}
+                className="w-2 h-2 rounded-full"
+                style={{
+                  backgroundColor:
+                    i < mockCurrentUser.connectionsUsed ? '#546e7a' : '#1a1a1a',
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Playlists Grid */}
+      <div className="mb-6">
+        {/* Header with Layout Toggle */}
+        <div className="flex items-center justify-between mb-4">
+          <h3 style={{ color: '#e0e0e0' }}>The Wall</h3>
+          
+          {/* Layout Mode Toggle */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => setLayoutMode('brick')}
+              className="p-2 rounded-lg transition-all duration-200"
+              style={{
+                backgroundColor: layoutMode === 'brick' ? 'rgba(211, 47, 47, 0.15)' : 'rgba(37, 37, 37, 0.5)',
+                border: `1px solid ${layoutMode === 'brick' ? '#d32f2f' : 'rgba(255, 255, 255, 0.05)'}`,
+              }}
+              title="Brick Look"
+            >
+              <Grid3x3 size={18} color={layoutMode === 'brick' ? '#d32f2f' : '#a0a0a0'} />
+            </button>
+            <button
+              onClick={() => setLayoutMode('spiral')}
+              className="p-2 rounded-lg transition-all duration-200"
+              style={{
+                backgroundColor: layoutMode === 'spiral' ? 'rgba(211, 47, 47, 0.15)' : 'rgba(37, 37, 37, 0.5)',
+                border: `1px solid ${layoutMode === 'spiral' ? '#d32f2f' : 'rgba(255, 255, 255, 0.05)'}`,
+              }}
+              title="Spiral View"
+            >
+              <Orbit size={18} color={layoutMode === 'spiral' ? '#d32f2f' : '#a0a0a0'} />
+            </button>
+          </div>
+        </div>
+
+        {/* Render based on layout mode */}
+        {layoutMode === 'brick' ? (
+          <div className="grid grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2">
+            {userPlaylists
+              .sort((a, b) => (b.structuralIntegrity || 0) - (a.structuralIntegrity || 0))
+              .map((playlist) => {
+                const size = getCardSize(playlist.structuralIntegrity);
+                return (
+                  <div
+                    key={playlist.id}
+                    className={size === 'large' ? 'col-span-2' : ''}
+                  >
+                    <BrickCard
+                      playlist={playlist}
+                      onClick={() => onPlaylistClick(playlist.id)}
+                      size="small"
+                    />
+                  </div>
+                );
+              })}
+          </div>
+        ) : (
+          renderSpiralLayout(userPlaylists)
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,398 @@
+import { Users, Music, Crown, Heart, TrendingUp } from 'lucide-react';
+import { mockFeedEvents, mockConnections, mockArtists } from '../../data/mockData';
+
+export function FeedScreen() {
+  const formatTime = (timestamp: string) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    
+    if (diffHours < 1) return 'Just now';
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays}d ago`;
+  };
+
+  // Generate more realistic feed events
+  const expandedFeedEvents = [
+    ...mockFeedEvents,
+    {
+      id: 'feed-7',
+      type: 'listening_milestone' as const,
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
+      data: {
+        user: mockConnections[0].user,
+        hours: 100,
+      },
+    },
+    {
+      id: 'feed-8',
+      type: 'new_favorite' as const,
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 8).toISOString(),
+      data: {
+        user: mockConnections[1].user,
+        track: {
+          title: 'Architectural Daydreams',
+          artist: mockArtists[2].name,
+          coverArt: 'https://images.unsplash.com/photo-1511379938547-c1f69419868d?w=400',
+        },
+        playCount: 42,
+      },
+    },
+    {
+      id: 'feed-9',
+      type: 'playlist_created' as const,
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 12).toISOString(),
+      data: {
+        user: mockConnections[2].user,
+        playlist: {
+          name: 'Midnight Foundations',
+          trackCount: 28,
+          coverImage: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400',
+        },
+      },
+    },
+    {
+      id: 'feed-10',
+      type: 'connection_formed' as const,
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 18).toISOString(),
+      data: {
+        userA: mockConnections[0].user,
+        userB: mockConnections[1].user,
+        matchScore: 87,
+      },
+    },
+  ];
+
+  return (
+    <div className="pb-24">
+      <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-6">
+        {/* Feed Events */}
+        <div className="space-y-4">
+          {expandedFeedEvents.map((event) => {
+            if (event.type === 'playlist_created') {
+              return (
+                <div
+                  key={event.id}
+                  className="p-5 rounded-lg"
+                  style={{
+                    backgroundColor: '#252525',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                  }}
+                >
+                  <div className="flex items-start gap-4 mb-4">
+                    <img
+                      src={event.data.user.avatar}
+                      alt={event.data.user.name}
+                      className="w-12 h-12 rounded-full"
+                    />
+                    <div className="flex-1">
+                      <p style={{ color: '#e0e0e0' }}>
+                        <strong>{event.data.user.name}</strong> created a new brick
+                      </p>
+                      <p className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>
+                        {formatTime(event.timestamp)}
+                      </p>
+                    </div>
+                    <Music size={20} color="#d32f2f" />
+                  </div>
+
+                  <div
+                    className="p-3 rounded-lg"
+                    style={{
+                      backgroundColor: '#1a1a1a',
+                      border: '1px solid #333333',
+                    }}
+                  >
+                    <h4 className="mb-3" style={{ color: '#e0e0e0' }}>
+                      {event.data.playlist.name}
+                    </h4>
+                    <div className="grid grid-cols-4 gap-2">
+                      {Array.from({ length: 4 }).map((_, i) => (
+                        <img
+                          key={i}
+                          src={event.data.playlist.coverImage}
+                          alt=""
+                          className="w-full aspect-square object-cover rounded"
+                        />
+                      ))}
+                    </div>
+                    <p className="mono mt-2" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>
+                      {event.data.playlist.trackCount} tracks
+                    </p>
+                  </div>
+                </div>
+              );
+            }
+
+            if (event.type === 'connection_formed') {
+              return (
+                <div
+                  key={event.id}
+                  className="p-5 rounded-lg"
+                  style={{
+                    backgroundColor: '#252525',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                  }}
+                >
+                  <div className="flex items-start gap-4 mb-4">
+                    <div className="flex -space-x-2">
+                      <img
+                        src={event.data.userA.avatar}
+                        alt={event.data.userA.name}
+                        className="w-10 h-10 rounded-full border-2 border-[#252525]"
+                      />
+                      <img
+                        src={event.data.userB.avatar}
+                        alt={event.data.userB.name}
+                        className="w-10 h-10 rounded-full border-2 border-[#252525]"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <p style={{ color: '#e0e0e0' }}>
+                        <strong>{event.data.userA.name}</strong> connected with{' '}
+                        <strong>{event.data.userB.name}</strong>
+                      </p>
+                      <p className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>
+                        {formatTime(event.timestamp)}
+                      </p>
+                    </div>
+                    <Users size={20} color="#546e7a" />
+                  </div>
+
+                  <div
+                    className="p-3 rounded-lg text-center"
+                    style={{
+                      backgroundColor: '#1a1a1a',
+                      border: '1px solid #333333',
+                    }}
+                  >
+                    <p className="mono" style={{ color: '#546e7a', fontSize: '1.5rem' }}>
+                      {event.data.matchScore}%
+                    </p>
+                    <p className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>
+                      STRUCTURAL INTEGRITY
+                    </p>
+                  </div>
+                </div>
+              );
+            }
+
+            if (event.type === 'patronage_update') {
+              return (
+                <div
+                  key={event.id}
+                  className="p-5 rounded-lg"
+                  style={{
+                    backgroundColor: '#252525',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                  }}
+                >
+                  <div className="flex items-start gap-4 mb-4">
+                    <img
+                      src={event.data.user.avatar}
+                      alt={event.data.user.name}
+                      className="w-12 h-12 rounded-full"
+                    />
+                    <div className="flex-1">
+                      <p style={{ color: '#e0e0e0' }}>
+                        <strong>{event.data.user.name}</strong> chose a new artist for November
+                      </p>
+                      <p className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>
+                        {formatTime(event.timestamp)}
+                      </p>
+                    </div>
+                    <Crown size={20} color="#d32f2f" />
+                  </div>
+
+                  <div
+                    className="p-4 rounded-lg flex items-center gap-4"
+                    style={{
+                      backgroundColor: '#1a1a1a',
+                      border: '1px solid #333333',
+                    }}
+                  >
+                    <img
+                      src={event.data.artist.image}
+                      alt={event.data.artist.name}
+                      className="w-16 h-16 rounded-lg object-cover"
+                    />
+                    <div className="flex-1">
+                      <h4 style={{ color: '#e0e0e0' }}>{event.data.artist.name}</h4>
+                      <p style={{ color: '#a0a0a0', fontSize: '0.875rem' }}>
+                        {event.data.artist.genre}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    className="w-full mt-3 py-2 rounded-full transition-all hover:bg-[#2a2a2a]"
+                    style={{
+                      backgroundColor: 'transparent',
+                      border: '1px solid #546e7a',
+                      color: '#546e7a',
+                    }}
+                  >
+                    <span className="mono" style={{ fontSize: '0.75rem' }}>
+                      Listen Ad-Free via {event.data.user.name}
+                    </span>
+                  </button>
+                </div>
+              );
+            }
+
+            if (event.type === 'listening_milestone') {
+              return (
+                <div
+                  key={event.id}
+                  className="p-5 rounded-lg"
+                  style={{
+                    backgroundColor: '#252525',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                  }}
+                >
+                  <div className="flex items-start gap-4 mb-4">
+                    <img
+                      src={event.data.user.avatar}
+                      alt={event.data.user.name}
+                      className="w-12 h-12 rounded-full"
+                    />
+                    <div className="flex-1">
+                      <p style={{ color: '#e0e0e0' }}>
+                        <strong>{event.data.user.name}</strong> reached {event.data.hours} hours of listening
+                      </p>
+                      <p className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>
+                        {formatTime(event.timestamp)}
+                      </p>
+                    </div>
+                    <TrendingUp size={20} color="#d32f2f" />
+                  </div>
+
+                  <div
+                    className="p-4 rounded-lg flex items-center gap-4"
+                    style={{
+                      backgroundColor: '#1a1a1a',
+                      border: '1px solid #333333',
+                    }}
+                  >
+                    <img
+                      src={event.data.user.avatar}
+                      alt={event.data.user.name}
+                      className="w-16 h-16 rounded-lg object-cover"
+                    />
+                    <div className="flex-1">
+                      <h4 style={{ color: '#e0e0e0' }}>{event.data.user.name}</h4>
+                      <p style={{ color: '#a0a0a0', fontSize: '0.875rem' }}>
+                        {event.data.hours} hours of listening
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    className="w-full mt-3 py-2 rounded-full transition-all hover:bg-[#2a2a2a]"
+                    style={{
+                      backgroundColor: 'transparent',
+                      border: '1px solid #546e7a',
+                      color: '#546e7a',
+                    }}
+                  >
+                    <span className="mono" style={{ fontSize: '0.75rem' }}>
+                      Celebrate with {event.data.user.name}
+                    </span>
+                  </button>
+                </div>
+              );
+            }
+
+            if (event.type === 'new_favorite') {
+              return (
+                <div
+                  key={event.id}
+                  className="p-5 rounded-lg"
+                  style={{
+                    backgroundColor: '#252525',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                  }}
+                >
+                  <div className="flex items-start gap-4 mb-4">
+                    <img
+                      src={event.data.user.avatar}
+                      alt={event.data.user.name}
+                      className="w-12 h-12 rounded-full"
+                    />
+                    <div className="flex-1">
+                      <p style={{ color: '#e0e0e0' }}>
+                        <strong>{event.data.user.name}</strong> added a new favorite track
+                      </p>
+                      <p className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>
+                        {formatTime(event.timestamp)}
+                      </p>
+                    </div>
+                    <Heart size={20} color="#d32f2f" />
+                  </div>
+
+                  <div
+                    className="p-4 rounded-lg flex items-center gap-4"
+                    style={{
+                      backgroundColor: '#1a1a1a',
+                      border: '1px solid #333333',
+                    }}
+                  >
+                    <img
+                      src={event.data.track.coverArt}
+                      alt={event.data.track.title}
+                      className="w-16 h-16 rounded-lg object-cover"
+                    />
+                    <div className="flex-1">
+                      <h4 style={{ color: '#e0e0e0' }}>{event.data.track.title}</h4>
+                      <p style={{ color: '#a0a0a0', fontSize: '0.875rem' }}>
+                        {event.data.track.artist}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    className="w-full mt-3 py-2 rounded-full transition-all hover:bg-[#2a2a2a]"
+                    style={{
+                      backgroundColor: 'transparent',
+                      border: '1px solid #546e7a',
+                      color: '#546e7a',
+                    }}
+                  >
+                    <span className="mono" style={{ fontSize: '0.75rem' }}>
+                      Listen to {event.data.track.title}
+                    </span>
+                  </button>
+                </div>
+              );
+            }
+
+            return null;
+          })}
+        </div>
+
+        {/* Load More */}
+        <div className="mt-6 text-center">
+          <button
+            className="px-6 py-3 rounded-full transition-all hover:bg-[#2a2a2a]"
+            style={{
+              backgroundColor: '#252525',
+              border: '1px solid #333333',
+              color: '#a0a0a0',
+            }}
+          >
+            <span className="mono" style={{ fontSize: '0.75rem' }}>
+              Load More
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
