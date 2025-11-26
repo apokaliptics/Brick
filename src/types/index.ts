@@ -21,15 +21,20 @@ export interface Artist {
 export interface Playlist {
   id: string;
   name: string;
+  description?: string;
   coverImage: string;
   trackCount: number;
-  isPublic: boolean;
-  hiRes: boolean;
-  creator: {
+  isPublic?: boolean;
+  hiRes?: boolean;
+  isLocked?: boolean;
+  creator: string | {
     id: string;
     name: string;
     avatar: string;
   };
+  creatorAvatar?: string;
+  duration?: number;
+  likes?: number;
   tracks?: Track[];
   structuralIntegrity?: number;
 }
@@ -40,9 +45,11 @@ export interface Track {
   artist: string;
   album: string;
   duration: string;
-  quality: '128kbps' | '320kbps' | 'FLAC';
+  quality: string;
   coverArt: string;
   audioUrl?: string;
+  isPatronage?: boolean;
+  genre?: string;
 }
 
 export interface Connection {
@@ -63,3 +70,5 @@ export interface FeedEvent {
   timestamp: string;
   data: any;
 }
+
+export type Screen = 'home' | 'radar' | 'vault' | 'profile' | 'feed';

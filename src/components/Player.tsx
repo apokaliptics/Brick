@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Link2 } from 'lucide-react';
 import { Track } from '../types';
+import { ImageWithFallback } from './figma/ImageWithFallback';
 
 interface PlayerProps {
   track: Track;
@@ -54,7 +55,7 @@ export function Player({ track, connectionName, isPlaying, onPlayPause }: Player
             boxShadow: '0 20px 60px rgba(0, 0, 0, 0.6)',
           }}
         >
-          <img
+          <ImageWithFallback
             src={track.coverArt}
             alt={track.album}
             className="w-full h-full object-cover"

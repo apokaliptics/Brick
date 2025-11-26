@@ -13,6 +13,7 @@ interface HomeScreenV2Props {
   activeFilter?: 'all' | 'payroll' | 'network' | 'recent' | 'feed';
   onFilterChange?: (filter: 'all' | 'payroll' | 'network' | 'recent' | 'feed') => void;
   onLocalTrackPlay?: (track: any) => void;
+  onLocalAlbumPlay?: (tracks: any[]) => void;
 }
 
 export function HomeScreenV2({ 
@@ -22,6 +23,7 @@ export function HomeScreenV2({
   activeFilter: externalActiveFilter, 
   onFilterChange: externalOnFilterChange,
   onLocalTrackPlay,
+  onLocalAlbumPlay,
 }: HomeScreenV2Props) {
   const [internalActiveFilter, setInternalActiveFilter] = useState<'all' | 'payroll' | 'network' | 'recent' | 'feed'>('all');
   const [localAudio, setLocalAudio] = useState<HTMLAudioElement | null>(null);
@@ -252,6 +254,7 @@ export function HomeScreenV2({
           <div className="px-6 pt-8">
             <LocalMusicUploader
               onPlayTrack={handlePlayLocalTrack}
+              onPlayAlbum={onLocalAlbumPlay}
               currentPlayingId={currentLocalTrack?.id}
               isPlaying={isLocalPlaying}
             />

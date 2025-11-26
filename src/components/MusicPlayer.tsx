@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Repeat, Shuffle, ChevronDown, ChevronUp } from 'lucide-react';
+import { ImageWithFallback } from './figma/ImageWithFallback';
 
 interface Track {
   id: string;
@@ -42,6 +43,16 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     audio.src = currentTrack.audioUrl;
     audio.load();
 
+    // Add error handler
+    const handleError = (e: Event) => {
+      console.error('Audio loading error:', e);
+      console.error('Failed to load:', currentTrack.audioUrl);
+      setIsPlaying(false);
+      onPlayPause?.(false);
+    };
+    
+    audio.addEventListener('error', handleError);
+
     // Auto play if was playing
     if (isPlaying) {
       // Wait for metadata to load before playing
@@ -55,6 +66,10 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
       };
       audio.addEventListener('canplay', handleCanPlay);
     }
+    
+    return () => {
+      audio.removeEventListener('error', handleError);
+    };
   }, [currentTrack]);
 
   useEffect(() => {
@@ -68,6 +83,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
         audio.currentTime = 0;
         audio.play();
       } else {
+        // Auto-advance to next track for gapless playback
         handleNext();
       }
     };
@@ -235,7 +251,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
             <div className="max-w-screen-2xl mx-auto px-4 py-2">
               <div className="flex items-center gap-3">
                 {/* Track Info */}
-                <img
+                <ImageWithFallback
                   src={currentTrack.coverImage}
                   alt={currentTrack.name}
                   className="w-12 h-12 rounded-lg object-cover flex-shrink-0"
@@ -318,7 +334,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
               <div className="flex items-center gap-4">
                 {/* Track Info */}
                 <div className="flex items-center gap-3 flex-1 min-w-0">
-                  <img
+                  <ImageWithFallback
                     src={currentTrack.coverImage}
                     alt={currentTrack.name}
                     className="w-14 h-14 rounded-lg object-cover flex-shrink-0"

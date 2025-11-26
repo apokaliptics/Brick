@@ -1,7 +1,9 @@
+import { useState, useEffect } from 'react';
+import { Home, User, Layout, Search, Heart, Plus, X, Music, ChevronLeft, Play, HardDrive, Grid3x3, Orbit } from 'lucide-react';
+import { Playlist } from '../../types';
+import { ImageWithFallback } from '../figma/ImageWithFallback';
 import { BrickCard } from '../BrickCard';
-import { mockCurrentUser, mockPlaylists } from '../../data/mockData';
-import { Grid3x3, Orbit } from 'lucide-react';
-import { useState } from 'react';
+import { mockPlaylists, mockCurrentUser } from '../../data/mockData';
 
 interface ProfileScreenProps {
   onPlaylistClick: (playlistId: string) => void;
@@ -10,6 +12,65 @@ interface ProfileScreenProps {
 export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
   const userPlaylists = mockPlaylists;
   const [layoutMode, setLayoutMode] = useState<'brick' | 'spiral'>('brick');
+  const [wallView, setWallView] = useState<'online' | 'local'>('online');
+  const [localPlaylists, setLocalPlaylists] = useState<Playlist[]>([]);
+
+  // Load local playlists from IndexedDB
+  useEffect(() => {
+    loadLocalPlaylists();
+    
+    // Listen for custom event to switch to local wall
+    const handleSwitchToLocal = () => {
+      setWallView('local');
+      loadLocalPlaylists();
+    };
+    
+    window.addEventListener('switchToLocalWall', handleSwitchToLocal as EventListener);
+    
+    return () => {
+      window.removeEventListener('switchToLocalWall', handleSwitchToLocal as EventListener);
+    };
+  }, []);
+
+  const loadLocalPlaylists = async () => {
+    try {
+      const db = await openPlaylistDB();
+      const transaction = db.transaction(['playlists'], 'readonly');
+      const store = transaction.objectStore('playlists');
+      const playlists = await new Promise<Playlist[]>((resolve, reject) => {
+        const request = store.getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      
+      setLocalPlaylists(playlists);
+      console.log('Loaded playlists from IndexedDB:', playlists);
+    } catch (error) {
+      console.error('Failed to load playlists:', error);
+      setLocalPlaylists([]);
+    }
+  };
+
+  const openPlaylistDB = (): Promise<IDBDatabase> => {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('BrickMusicDB', 2);
+      
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+      
+      request.onupgradeneeded = (event) => {
+        const db = (event.target as IDBOpenDBRequest).result;
+        
+        if (!db.objectStoreNames.contains('localTracks')) {
+          db.createObjectStore('localTracks', { keyPath: 'id' });
+        }
+        
+        if (!db.objectStoreNames.contains('playlists')) {
+          db.createObjectStore('playlists', { keyPath: 'id' });
+        }
+      };
+    });
+  };
 
   // Get dynamic size based on structural integrity
   const getCardSize = (structuralIntegrity: number | undefined): 'small' | 'medium' | 'large' => {
@@ -61,7 +122,7 @@ export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
             }}
             onClick={() => onPlaylistClick(sorted[0].id)}
           >
-            <img
+            <ImageWithFallback
               src={sorted[0].coverImage}
               alt={sorted[0].name}
               className="rounded-xl transition-all duration-300 group-hover:scale-110"
@@ -127,7 +188,7 @@ export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
               />
               
               {/* Album Image */}
-              <img
+              <ImageWithFallback
                 src={playlist.coverImage}
                 alt={playlist.name}
                 className="relative rounded-lg transition-all duration-300 group-hover:scale-125"
@@ -264,9 +325,41 @@ export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
 
       {/* Playlists Grid */}
       <div className="mb-6">
-        {/* Header with Layout Toggle */}
+        {/* Header with Toggles */}
         <div className="flex items-center justify-between mb-4">
-          <h3 style={{ color: '#e0e0e0' }}>The Wall</h3>
+          <div className="flex items-center gap-3">
+            <h3 style={{ color: '#e0e0e0' }}>The Wall</h3>
+            
+            {/* Online/Local Toggle */}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setWallView('online')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all duration-200"
+                style={{
+                  backgroundColor: wallView === 'online' ? 'rgba(211, 47, 47, 0.2)' : '#252525',
+                  border: `1px solid ${wallView === 'online' ? '#d32f2f' : '#333333'}`,
+                }}
+              >
+                <Music size={14} color={wallView === 'online' ? '#d32f2f' : '#a0a0a0'} />
+                <span className="mono" style={{ color: wallView === 'online' ? '#d32f2f' : '#a0a0a0', fontSize: '0.7rem' }}>
+                  Online
+                </span>
+              </button>
+              <button
+                onClick={() => setWallView('local')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all duration-200"
+                style={{
+                  backgroundColor: wallView === 'local' ? 'rgba(211, 47, 47, 0.2)' : '#252525',
+                  border: `1px solid ${wallView === 'local' ? '#d32f2f' : '#333333'}`,
+                }}
+              >
+                <HardDrive size={14} color={wallView === 'local' ? '#d32f2f' : '#a0a0a0'} />
+                <span className="mono" style={{ color: wallView === 'local' ? '#d32f2f' : '#a0a0a0', fontSize: '0.7rem' }}>
+                  Local ({localPlaylists.length})
+                </span>
+              </button>
+            </div>
+          </div>
           
           {/* Layout Mode Toggle */}
           <div className="flex gap-2">
@@ -296,9 +389,17 @@ export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
         </div>
 
         {/* Render based on layout mode */}
-        {layoutMode === 'brick' ? (
+        {wallView === 'local' && localPlaylists.length === 0 ? (
+          <div className="p-12 rounded-lg text-center" style={{ backgroundColor: '#252525', border: '1px dashed #333333' }}>
+            <HardDrive size={48} color="#666666" className="mx-auto mb-4" />
+            <h4 style={{ color: '#a0a0a0', marginBottom: '8px' }}>No Local Blueprints Yet</h4>
+            <p className="mono" style={{ color: '#666666', fontSize: '0.75rem' }}>
+              Create your first playlist from the "+" button
+            </p>
+          </div>
+        ) : layoutMode === 'brick' ? (
           <div className="grid grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2">
-            {userPlaylists
+            {(wallView === 'online' ? userPlaylists : localPlaylists)
               .sort((a, b) => (b.structuralIntegrity || 0) - (a.structuralIntegrity || 0))
               .map((playlist) => {
                 const size = getCardSize(playlist.structuralIntegrity);
@@ -317,7 +418,7 @@ export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
               })}
           </div>
         ) : (
-          renderSpiralLayout(userPlaylists)
+          renderSpiralLayout(wallView === 'online' ? userPlaylists : localPlaylists)
         )}
       </div>
     </div>

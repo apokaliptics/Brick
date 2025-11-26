@@ -1,5 +1,6 @@
 import { Playlist } from '../types';
 import { Lock } from 'lucide-react';
+import { ImageWithFallback } from './figma/ImageWithFallback';
 
 interface BrickCardProps {
   playlist: Playlist;
@@ -27,7 +28,7 @@ export function BrickCard({ playlist, isLocked = false, onClick, size = 'medium'
     >
       {/* Album Art */}
       <div className="relative w-full aspect-square">
-        <img
+        <ImageWithFallback
           src={playlist.coverImage}
           alt={playlist.name}
           className={`w-full h-full object-cover ${isLocked ? 'blur-xl' : ''}`}
@@ -81,14 +82,23 @@ export function BrickCard({ playlist, isLocked = false, onClick, size = 'medium'
           {playlist.name}
         </h4>
         <div className="flex items-center gap-2">
-          <img
-            src={playlist.creator.avatar}
-            alt={playlist.creator.name}
-            className="w-4 h-4 rounded-full"
-          />
-          <p style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
-            {playlist.creator.name}
-          </p>
+          {playlist.creator && (
+            <>
+              <ImageWithFallback
+                src={playlist.creator.avatar}
+                alt={playlist.creator.name}
+                className="w-4 h-4 rounded-full"
+              />
+              <p style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
+                {playlist.creator.name}
+              </p>
+            </>
+          )}
+          {!playlist.creator && (
+            <p style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
+              Your Collection
+            </p>
+          )}
         </div>
         {playlist.structuralIntegrity !== undefined && (
           <div className="mt-2">

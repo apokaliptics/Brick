@@ -100,6 +100,7 @@ export const mockPlaylists: Playlist[] = [
       avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400',
     },
     structuralIntegrity: 85,
+    tracks: [mockTracks[0], mockTracks[1], mockTracks[2], mockTracks[3]],
   },
   {
     id: 'playlist-2',
@@ -114,6 +115,7 @@ export const mockPlaylists: Playlist[] = [
       avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=400',
     },
     structuralIntegrity: 92,
+    tracks: [mockTracks[1], mockTracks[2], mockTracks[3], mockTracks[0]],
   },
   {
     id: 'playlist-3',
@@ -128,6 +130,7 @@ export const mockPlaylists: Playlist[] = [
       avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=400',
     },
     structuralIntegrity: 78,
+    tracks: [mockTracks[2], mockTracks[3], mockTracks[0], mockTracks[1]],
   },
   {
     id: 'playlist-4',
@@ -142,6 +145,7 @@ export const mockPlaylists: Playlist[] = [
       avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400',
     },
     structuralIntegrity: 88,
+    tracks: [mockTracks[3], mockTracks[0], mockTracks[1], mockTracks[2]],
   },
   {
     id: 'playlist-5',
@@ -156,6 +160,7 @@ export const mockPlaylists: Playlist[] = [
       avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400',
     },
     structuralIntegrity: 95,
+    tracks: [mockTracks[0], mockTracks[2], mockTracks[1], mockTracks[3]],
   },
 ];
 

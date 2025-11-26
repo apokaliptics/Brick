@@ -1,64 +1,151 @@
-import { Upload, Music, Trash2, Play, Pause } from 'lucide-react';
+import { Upload, Music, Trash2, Play, Pause, Album, ListMusic } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 
 interface LocalTrack {
   id: string;
   name: string;
+  artist: string;
+  album: string;
+  albumArtist?: string;
+  year?: string;
+  trackNumber?: number;
+  discNumber?: number;
+  genre?: string;
   file: File;
   url: string;
   duration: number;
   format: string;
   size: number;
+  coverArt?: string; // Base64 encoded image
 }
 
 interface LocalMusicUploaderProps {
   onPlayTrack: (track: LocalTrack) => void;
+  onPlayAlbum?: (tracks: LocalTrack[]) => void;
   currentPlayingId?: string;
   isPlaying?: boolean;
 }
 
-export function LocalMusicUploader({ onPlayTrack, currentPlayingId, isPlaying }: LocalMusicUploaderProps) {
+// IndexedDB helper functions
+const DB_NAME = 'BrickMusicDB';
+const STORE_NAME = 'localTracks';
+const DB_VERSION = 2;
+
+const openDB = (): Promise<IDBDatabase> => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+    
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      
+      // Create localTracks store if it doesn't exist
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+      
+      // Create playlists store if it doesn't exist
+      if (!db.objectStoreNames.contains('playlists')) {
+        db.createObjectStore('playlists', { keyPath: 'id' });
+      }
+    };
+  });
+};
+
+const saveTrackToDB = async (track: any): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.put(track);
+    
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const getAllTracksFromDB = async (): Promise<any[]> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.getAll();
+    
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const deleteTrackFromDB = async (id: string): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.delete(id);
+    
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId, isPlaying }: LocalMusicUploaderProps) {
   const [localTracks, setLocalTracks] = useState<LocalTrack[]>([]);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'tracks' | 'albums'>('tracks');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load tracks from localStorage on mount
+  // Load jsmediatags library
   useEffect(() => {
-    const stored = localStorage.getItem('brick_local_tracks');
-    if (stored) {
-      try {
-        const parsedTracks = JSON.parse(stored);
-        // Recreate blob URLs from stored file data
-        const restoredTracks = parsedTracks.map((track: any) => ({
-          ...track,
-          file: null, // Can't restore File objects
-          url: track.url, // Keep the URL reference
-        }));
-        setLocalTracks(restoredTracks);
-      } catch (error) {
-        console.error('Error loading local tracks:', error);
-      }
-    }
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js';
+    script.async = true;
+    document.body.appendChild(script);
+    
+    return () => {
+      document.body.removeChild(script);
+    };
   }, []);
 
-  // Save tracks to localStorage whenever they change
+  // Load tracks from IndexedDB on mount
   useEffect(() => {
-    if (localTracks.length > 0) {
+    const loadTracks = async () => {
       try {
-        const tracksToStore = localTracks.map(track => ({
-          id: track.id,
-          name: track.name,
-          url: track.url,
-          duration: track.duration,
-          format: track.format,
-          size: track.size,
+        // Clear old localStorage data if it exists
+        if (localStorage.getItem('brick_local_tracks')) {
+          console.log('Migrating from localStorage to IndexedDB...');
+          localStorage.removeItem('brick_local_tracks');
+        }
+        
+        const storedTracks = await getAllTracksFromDB();
+        
+        // Recreate blob URLs from stored File objects
+        const tracksWithUrls = storedTracks.map(track => ({
+          ...track,
+          url: URL.createObjectURL(track.file),
         }));
-        localStorage.setItem('brick_local_tracks', JSON.stringify(tracksToStore));
+        
+        setLocalTracks(tracksWithUrls);
       } catch (error) {
-        console.error('Error saving local tracks:', error);
+        console.error('Error loading local tracks from IndexedDB:', error);
+      } finally {
+        setIsLoading(false);
       }
-    }
-  }, [localTracks]);
+    };
+    
+    loadTracks();
+    
+    // Cleanup: revoke blob URLs when component unmounts
+    return () => {
+      localTracks.forEach(track => {
+        if (track.url.startsWith('blob:')) {
+          URL.revokeObjectURL(track.url);
+        }
+      });
+    };
+  }, []);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -68,21 +155,55 @@ export function LocalMusicUploader({ onPlayTrack, currentPlayingId, isPlaying }:
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const url = URL.createObjectURL(file);
       const format = file.name.split('.').pop()?.toUpperCase() || 'UNKNOWN';
+      const url = URL.createObjectURL(file);
+
+      // Extract metadata using jsmediatags
+      const metadata = await new Promise<any>((resolve) => {
+        // @ts-ignore - jsmediatags is loaded via CDN
+        if (typeof window.jsmediatags !== 'undefined') {
+          window.jsmediatags.read(file, {
+            onSuccess: (tag: any) => resolve(tag),
+            onError: () => resolve(null),
+          });
+        } else {
+          resolve(null);
+        }
+      });
 
       // Create audio element to get duration
       const audio = new Audio(url);
       await new Promise((resolve) => {
         audio.addEventListener('loadedmetadata', () => {
+          const tags = metadata?.tags || {};
+          
+          // Extract album art if available
+          let coverArt: string | undefined;
+          if (tags.picture) {
+            const { data, format: imgFormat } = tags.picture;
+            let base64String = '';
+            for (let j = 0; j < data.length; j++) {
+              base64String += String.fromCharCode(data[j]);
+            }
+            coverArt = `data:${imgFormat};base64,${btoa(base64String)}`;
+          }
+
           newTracks.push({
             id: `local-${Date.now()}-${i}`,
-            name: file.name.replace(/\.(flac|wav|mp3)$/i, ''),
+            name: tags.title || file.name.replace(/\.(flac|wav|mp3)$/i, ''),
+            artist: tags.artist || 'Unknown Artist',
+            album: tags.album || 'Unknown Album',
+            albumArtist: tags.album_artist,
+            year: tags.year,
+            trackNumber: tags.track ? parseInt(tags.track) : undefined,
+            discNumber: tags.disc ? parseInt(tags.disc) : undefined,
+            genre: tags.genre,
             file,
             url,
             duration: audio.duration,
             format,
             size: file.size,
+            coverArt,
           });
           resolve(null);
         });
@@ -96,14 +217,25 @@ export function LocalMusicUploader({ onPlayTrack, currentPlayingId, isPlaying }:
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+
+    // Save new tracks to IndexedDB
+    newTracks.forEach(track => saveTrackToDB(track));
   };
 
-  const handleDeleteTrack = (trackId: string) => {
+  const handleDeleteTrack = async (trackId: string) => {
     const track = localTracks.find(t => t.id === trackId);
-    if (track) {
+    if (track && track.url.startsWith('blob:')) {
       URL.revokeObjectURL(track.url);
     }
+    
     setLocalTracks(localTracks.filter(t => t.id !== trackId));
+    
+    // Delete from IndexedDB
+    try {
+      await deleteTrackFromDB(trackId);
+    } catch (error) {
+      console.error('Error deleting track from IndexedDB:', error);
+    }
   };
 
   const formatDuration = (seconds: number) => {
@@ -118,6 +250,38 @@ export function LocalMusicUploader({ onPlayTrack, currentPlayingId, isPlaying }:
     }
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
+
+  // Group tracks by album
+  const albumGroups = localTracks.reduce((acc, track) => {
+    const albumKey = `${track.album}:::${track.albumArtist || track.artist}`;
+    if (!acc[albumKey]) {
+      acc[albumKey] = [];
+    }
+    acc[albumKey].push(track);
+    return acc;
+  }, {} as Record<string, LocalTrack[]>);
+
+  // Sort tracks within each album by track number
+  Object.keys(albumGroups).forEach(albumKey => {
+    albumGroups[albumKey].sort((a, b) => {
+      if (a.discNumber !== b.discNumber) {
+        return (a.discNumber || 0) - (b.discNumber || 0);
+      }
+      return (a.trackNumber || 0) - (b.trackNumber || 0);
+    });
+  });
+
+  const albums = Object.entries(albumGroups).map(([key, tracks]) => {
+    const [albumName, artistName] = key.split(':::');
+    return {
+      name: albumName,
+      artist: artistName,
+      tracks,
+      coverArt: tracks.find(t => t.coverArt)?.coverArt,
+      year: tracks.find(t => t.year)?.year,
+      totalDuration: tracks.reduce((sum, t) => sum + t.duration, 0),
+    };
+  });
 
   return (
     <div
@@ -186,7 +350,22 @@ export function LocalMusicUploader({ onPlayTrack, currentPlayingId, isPlaying }:
       {/* Track List */}
       {isExpanded && (
         <div className="p-4">
-          {localTracks.length === 0 ? (
+          {isLoading ? (
+            <div className="text-center py-12">
+              <div
+                className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center"
+                style={{
+                  backgroundColor: '#252525',
+                  border: '1px solid #333333',
+                }}
+              >
+                <Music size={24} color="#a0a0a0" />
+              </div>
+              <p className="mono mb-2" style={{ color: '#a0a0a0', fontSize: '0.85rem' }}>
+                Loading tracks...
+              </p>
+            </div>
+          ) : localTracks.length === 0 ? (
             <div className="text-center py-12">
               <div
                 className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center"
@@ -205,71 +384,185 @@ export function LocalMusicUploader({ onPlayTrack, currentPlayingId, isPlaying }:
               </p>
             </div>
           ) : (
-            <div className="space-y-2">
-              {localTracks.map((track) => (
-                <div
-                  key={track.id}
-                  className="group flex items-center gap-4 p-3 rounded-lg transition-all duration-200"
+            <>
+              {/* View Mode Toggle */}
+              <div className="flex gap-2 mb-4">
+                <button
+                  onClick={() => setViewMode('tracks')}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200"
                   style={{
-                    backgroundColor: currentPlayingId === track.id ? 'rgba(211, 47, 47, 0.1)' : '#252525',
-                    border: `1px solid ${currentPlayingId === track.id ? '#d32f2f' : '#333333'}`,
+                    backgroundColor: viewMode === 'tracks' ? 'rgba(211, 47, 47, 0.2)' : '#252525',
+                    border: `1px solid ${viewMode === 'tracks' ? '#d32f2f' : '#333333'}`,
                   }}
                 >
-                  {/* Play Button */}
-                  <button
-                    onClick={() => onPlayTrack(track)}
-                    className="flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-200 hover:scale-110"
-                    style={{
-                      backgroundColor: currentPlayingId === track.id ? '#d32f2f' : 'rgba(211, 47, 47, 0.15)',
-                      border: '1px solid #d32f2f',
-                    }}
-                  >
-                    {currentPlayingId === track.id && isPlaying ? (
-                      <Pause size={16} color="#ffffff" />
-                    ) : (
-                      <Play size={16} color={currentPlayingId === track.id ? '#ffffff' : '#d32f2f'} />
-                    )}
-                  </button>
+                  <ListMusic size={14} color={viewMode === 'tracks' ? '#d32f2f' : '#a0a0a0'} />
+                  <span className="mono" style={{ color: viewMode === 'tracks' ? '#d32f2f' : '#a0a0a0', fontSize: '0.75rem' }}>
+                    Tracks
+                  </span>
+                </button>
+                <button
+                  onClick={() => setViewMode('albums')}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200"
+                  style={{
+                    backgroundColor: viewMode === 'albums' ? 'rgba(211, 47, 47, 0.2)' : '#252525',
+                    border: `1px solid ${viewMode === 'albums' ? '#d32f2f' : '#333333'}`,
+                  }}
+                >
+                  <Album size={14} color={viewMode === 'albums' ? '#d32f2f' : '#a0a0a0'} />
+                  <span className="mono" style={{ color: viewMode === 'albums' ? '#d32f2f' : '#a0a0a0', fontSize: '0.75rem' }}>
+                    Albums
+                  </span>
+                </button>
+              </div>
 
-                  {/* Track Info */}
-                  <div className="flex-1 min-w-0">
-                    <h4 className="mono truncate" style={{ color: '#e0e0e0', fontSize: '0.85rem' }}>
-                      {track.name}
-                    </h4>
-                    <div className="flex items-center gap-3 mt-1">
-                      <span
-                        className="mono px-2 py-0.5 rounded"
+              {viewMode === 'tracks' ? (
+                <div className="space-y-2">
+                  {localTracks.map((track) => (
+                    <div
+                      key={track.id}
+                      className="group flex items-center gap-4 p-3 rounded-lg transition-all duration-200"
+                      style={{
+                        backgroundColor: currentPlayingId === track.id ? 'rgba(211, 47, 47, 0.1)' : '#252525',
+                        border: `1px solid ${currentPlayingId === track.id ? '#d32f2f' : '#333333'}`,
+                      }}
+                    >
+                      {/* Cover Art */}
+                      {track.coverArt ? (
+                        <img
+                          src={track.coverArt}
+                          alt={track.album}
+                          className="flex-shrink-0 w-12 h-12 rounded object-cover"
+                        />
+                      ) : (
+                        <div
+                          className="flex-shrink-0 w-12 h-12 rounded flex items-center justify-center"
+                          style={{ backgroundColor: '#1a1a1a', border: '1px solid #333333' }}
+                        >
+                          <Music size={20} color="#666666" />
+                        </div>
+                      )}
+
+                      {/* Track Info */}
+                      <div className="flex-1 min-w-0">
+                        <h4 className="mono truncate" style={{ color: '#e0e0e0', fontSize: '0.85rem' }}>
+                          {track.name}
+                        </h4>
+                        <p className="mono truncate" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
+                          {track.artist} • {track.album}
+                        </p>
+                        <div className="flex items-center gap-3 mt-1">
+                          <span
+                            className="mono px-2 py-0.5 rounded"
+                            style={{
+                              backgroundColor: '#1a1a1a',
+                              color: '#d32f2f',
+                              fontSize: '0.65rem',
+                            }}
+                          >
+                            {track.format}
+                          </span>
+                          <span className="mono" style={{ color: '#666666', fontSize: '0.7rem' }}>
+                            {formatDuration(track.duration)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Play Button */}
+                      <button
+                        onClick={() => onPlayTrack(track)}
+                        className="flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-200 hover:scale-110"
                         style={{
-                          backgroundColor: '#1a1a1a',
-                          color: '#d32f2f',
-                          fontSize: '0.65rem',
+                          backgroundColor: currentPlayingId === track.id ? '#d32f2f' : 'rgba(211, 47, 47, 0.15)',
+                          border: '1px solid #d32f2f',
                         }}
                       >
-                        {track.format}
-                      </span>
-                      <span className="mono" style={{ color: '#666666', fontSize: '0.7rem' }}>
-                        {formatDuration(track.duration)}
-                      </span>
-                      <span className="mono" style={{ color: '#666666', fontSize: '0.7rem' }}>
-                        {formatFileSize(track.size)}
-                      </span>
-                    </div>
-                  </div>
+                        {currentPlayingId === track.id && isPlaying ? (
+                          <Pause size={16} color="#ffffff" />
+                        ) : (
+                          <Play size={16} color={currentPlayingId === track.id ? '#ffffff' : '#d32f2f'} />
+                        )}
+                      </button>
 
-                  {/* Delete Button */}
-                  <button
-                    onClick={() => handleDeleteTrack(track.id)}
-                    className="flex-shrink-0 p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-200 hover:scale-110"
-                    style={{
-                      backgroundColor: 'rgba(211, 47, 47, 0.15)',
-                      border: '1px solid #d32f2f',
-                    }}
-                  >
-                    <Trash2 size={14} color="#d32f2f" />
-                  </button>
+                      {/* Delete Button */}
+                      <button
+                        onClick={() => handleDeleteTrack(track.id)}
+                        className="flex-shrink-0 p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-200 hover:scale-110"
+                        style={{
+                          backgroundColor: 'rgba(211, 47, 47, 0.15)',
+                          border: '1px solid #d32f2f',
+                        }}
+                      >
+                        <Trash2 size={14} color="#d32f2f" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {albums.map((album, index) => (
+                    <div
+                      key={index}
+                      className="group rounded-lg overflow-hidden transition-all duration-200 hover:scale-105"
+                      style={{
+                        backgroundColor: '#252525',
+                        border: '1px solid #333333',
+                      }}
+                    >
+                      {/* Album Cover */}
+                      <div className="relative aspect-square">
+                        {album.coverArt ? (
+                          <img
+                            src={album.coverArt}
+                            alt={album.name}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div
+                            className="w-full h-full flex items-center justify-center"
+                            style={{ backgroundColor: '#1a1a1a' }}
+                          >
+                            <Album size={48} color="#666666" />
+                          </div>
+                        )}
+                        {/* Play Overlay */}
+                        <button
+                          onClick={() => onPlayAlbum?.(album.tracks)}
+                          className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                          style={{ backgroundColor: 'rgba(0, 0, 0, 0.7)' }}
+                        >
+                          <div
+                            className="w-16 h-16 rounded-full flex items-center justify-center"
+                            style={{ backgroundColor: '#d32f2f' }}
+                          >
+                            <Play size={24} color="#ffffff" />
+                          </div>
+                        </button>
+                      </div>
+
+                      {/* Album Info */}
+                      <div className="p-3">
+                        <h4 className="mono truncate" style={{ color: '#e0e0e0', fontSize: '0.85rem' }}>
+                          {album.name}
+                        </h4>
+                        <p className="mono truncate" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
+                          {album.artist}
+                        </p>
+                        <div className="flex items-center gap-2 mt-2">
+                          {album.year && (
+                            <span className="mono" style={{ color: '#666666', fontSize: '0.7rem' }}>
+                              {album.year}
+                            </span>
+                          )}
+                          <span className="mono" style={{ color: '#666666', fontSize: '0.7rem' }}>
+                            {album.tracks.length} tracks
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
 
           {/* Info Banner */}
