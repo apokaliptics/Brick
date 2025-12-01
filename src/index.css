@@ -201,7 +201,6 @@
   }
 
   img, svg, video, canvas, audio, iframe, embed, object {
-    vertical-align: middle;
     display: block;
   }
 
@@ -1300,6 +1299,7 @@
     line-height: var(--tw-leading, var(--text-6xl--line-height));
   }
 
+
   .text-sm {
     font-size: var(--text-sm);
     line-height: var(--tw-leading, var(--text-sm--line-height));
@@ -1960,9 +1960,6 @@
     opacity: .5;
   }
 }
-
-@import "tailwindcss";
-/* virtual-fs:file:///styles/globals.css */
 @layer base {
   :root {
     --bg-primary: #1a1a1a;

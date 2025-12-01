@@ -23,6 +23,7 @@ export interface Playlist {
   name: string;
   description?: string;
   coverImage: string;
+  customCoverImage?: string;
   trackCount: number;
   isPublic?: boolean;
   hiRes?: boolean;
@@ -37,16 +38,20 @@ export interface Playlist {
   likes?: number;
   tracks?: Track[];
   structuralIntegrity?: number;
+  deletionQueuedAt?: number;
+  deletionScheduledFor?: number;
 }
 
 export interface Track {
   id: string;
-  title: string;
+  title?: string; // Optional
+  name?: string; // Alternative to title
   artist: string;
   album: string;
-  duration: string;
-  quality: string;
-  coverArt: string;
+  duration?: string;
+  quality?: string;
+  coverArt?: string;
+  coverImage?: string; // Alternative to coverArt
   audioUrl?: string;
   isPatronage?: boolean;
   genre?: string;

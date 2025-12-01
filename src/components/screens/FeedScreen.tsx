@@ -1,7 +1,31 @@
-import { Users, Music, Crown, Heart, TrendingUp } from 'lucide-react';
+import { Users, Music, Crown, Heart, TrendingUp, Send } from 'lucide-react';
+import { useState } from 'react';
+import { useTheme } from '../../contexts/ThemeContext';
 import { mockFeedEvents, mockConnections, mockArtists } from '../../data/mockData';
 
 export function FeedScreen() {
+  const { colors } = useTheme();
+  const [postContent, setPostContent] = useState('');
+  const [posts, setPosts] = useState<Array<{ id: string; content: string; user: any; timestamp: string; likes: number }>>([]);
+
+  const handlePostSubmit = () => {
+    if (!postContent.trim()) return;
+
+    const newPost = {
+      id: Date.now().toString(),
+      content: postContent,
+      user: {
+        name: 'You',
+        avatar: 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=100',
+      },
+      timestamp: new Date().toISOString(),
+      likes: 0,
+    };
+
+    setPosts([newPost, ...posts]);
+    setPostContent('');
+  };
+
   const formatTime = (timestamp: string) => {
     const date = new Date(timestamp);
     const now = new Date();
@@ -68,6 +92,122 @@ export function FeedScreen() {
   return (
     <div className="pb-24">
       <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-6">
+        {/* Post Creation Box */}
+        <div
+          className="p-5 rounded-lg mb-6"
+          style={{
+            backgroundColor: colors.bg.secondary,
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+            border: `1px solid ${colors.border}`,
+          }}
+        >
+          <div className="flex items-start gap-4">
+            <img
+              src="https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=100"
+              alt="Your avatar"
+              className="w-10 h-10 rounded-full"
+            />
+            <div className="flex-1">
+              <textarea
+                value={postContent}
+                onChange={(e) => setPostContent(e.target.value)}
+                placeholder="Share your thoughts on The Neighbourhood..."
+                className="w-full bg-[#1a1a1a] text-[#e0e0e0] rounded-lg p-3 resize-none focus:outline-none focus:ring-2 focus:ring-[#d32f2f] placeholder-[#555555]"
+                rows={3}
+              />
+              <div className="flex justify-end gap-3 mt-3">
+                <button
+                  onClick={() => setPostContent('')}
+                  className="px-4 py-2 rounded-lg transition-colors hover:opacity-80"
+                  style={{
+                    color: colors.text.secondary,
+                    backgroundColor: colors.bg.primary,
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handlePostSubmit}
+                  disabled={!postContent.trim()}
+                  className="px-4 py-2 rounded-lg flex items-center gap-2 transition-all duration-200 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{
+                    backgroundColor: postContent.trim() ? colors.accent : colors.text.tertiary,
+                    color: '#e0e0e0',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Send size={16} />
+                  Post
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* User Posts */}
+        {posts.length > 0 && (
+          <div className="space-y-4 mb-6">
+            {posts.map((post) => {
+              const timeAgo = new Date();
+              const postDate = new Date(post.timestamp);
+              const diffMs = timeAgo.getTime() - postDate.getTime();
+              const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+              const timeString = diffHours < 1 ? 'Just now' : diffHours < 24 ? `${diffHours}h ago` : `${Math.floor(diffHours / 24)}d ago`;
+
+              return (
+                <div
+                  key={post.id}
+                  className="p-5 rounded-lg"
+                  style={{
+                    backgroundColor: '#252525',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                  }}
+                >
+                  <div className="flex items-start gap-4">
+                    <img
+                      src={post.user.avatar}
+                      alt={post.user.name}
+                      className="w-12 h-12 rounded-full"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-2">
+                        <p style={{ color: colors.text.primary }} className="font-semibold">
+                          {post.user.name}
+                        </p>
+                        <p className="mono" style={{ color: colors.text.tertiary, fontSize: '0.7rem' }}>
+                          {timeString}
+                        </p>
+                      </div>
+                      <p style={{ color: colors.text.primary }} className="mb-3 leading-relaxed">
+                        {post.content}
+                      </p>
+                      <button
+                        onClick={() => {
+                          const updatedPosts = posts.map(p =>
+                            p.id === post.id ? { ...p, likes: p.likes + 1 } : p
+                          );
+                          setPosts(updatedPosts);
+                        }}
+                        className="flex items-center gap-2 px-3 py-1 rounded-lg transition-colors hover:bg-[#1a1a1a]"
+                      >
+                        <Heart
+                          size={16}
+                          fill={post.likes > 0 ? '#d32f2f' : 'none'}
+                          color={post.likes > 0 ? '#d32f2f' : '#a0a0a0'}
+                        />
+                        <span style={{ color: '#a0a0a0', fontSize: '0.875rem' }}>
+                          {post.likes > 0 ? post.likes : 'Like'}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Feed Events */}
         <div className="space-y-4">
           {expandedFeedEvents.map((event) => {

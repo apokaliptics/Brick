@@ -1,21 +1,39 @@
 import { Playlist } from '../types';
-import { Lock } from 'lucide-react';
+import { Lock, Trash2 } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
 interface BrickCardProps {
   playlist: Playlist;
   isLocked?: boolean;
   onClick?: () => void;
+  onDelete?: (playlistId: string) => void;
+  onCancelDelete?: (playlistId: string) => void;
+  onConfirmDelete?: (playlistId: string) => void;
   size?: 'small' | 'medium' | 'large';
   compact?: boolean;
+  canDelete?: boolean;
+  timeUntilDeletion?: string;
 }
 
-export function BrickCard({ playlist, isLocked = false, onClick, size = 'medium', compact = false }: BrickCardProps) {
+export function BrickCard({ 
+  playlist, 
+  isLocked = false, 
+  onClick, 
+  onDelete,
+  onCancelDelete,
+  onConfirmDelete,
+  size = 'medium', 
+  compact = false,
+  canDelete = false,
+  timeUntilDeletion,
+}: BrickCardProps) {
   const sizeClasses = {
     small: 'w-full',
     medium: 'w-full',
     large: 'w-full col-span-2',
   };
+
+  const isDeletionQueued = playlist.deletionQueuedAt !== undefined;
 
   return (
     <div
@@ -29,7 +47,7 @@ export function BrickCard({ playlist, isLocked = false, onClick, size = 'medium'
       {/* Album Art */}
       <div className="relative w-full aspect-square">
         <ImageWithFallback
-          src={playlist.coverImage}
+          src={playlist.customCoverImage || playlist.coverImage}
           alt={playlist.name}
           className={`w-full h-full object-cover ${isLocked ? 'blur-xl' : ''}`}
         />
@@ -129,6 +147,53 @@ export function BrickCard({ playlist, isLocked = false, onClick, size = 'medium'
               />
             </div>
           </div>
+        )}
+        
+        {/* Deletion Status and Actions */}
+        {isDeletionQueued && (
+          <div className="mt-3 p-2 rounded" style={{ backgroundColor: 'rgba(211, 47, 47, 0.1)', border: '1px solid #d32f2f' }}>
+            <p className="mono text-center text-sm mb-2" style={{ color: '#d32f2f', fontSize: '0.7rem' }}>
+              {timeUntilDeletion}
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCancelDelete?.(playlist.id);
+                }}
+                className="flex-1 py-1 px-2 rounded text-xs transition-all hover:scale-105"
+                style={{ backgroundColor: '#252525', border: '1px solid #a0a0a0', color: '#a0a0a0' }}
+              >
+                Cancel
+              </button>
+              {canDelete && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onConfirmDelete?.(playlist.id);
+                  }}
+                  className="flex-1 py-1 px-2 rounded text-xs transition-all hover:scale-105"
+                  style={{ backgroundColor: '#d32f2f', color: '#e0e0e0' }}
+                >
+                  Delete Now
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        
+        {!isDeletionQueued && onDelete && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(playlist.id);
+            }}
+            className="w-full mt-3 py-2 px-3 rounded flex items-center justify-center gap-2 transition-all hover:bg-red-900/20"
+            style={{ backgroundColor: 'rgba(211, 47, 47, 0.1)', border: '1px solid #d32f2f', color: '#d32f2f' }}
+          >
+            <Trash2 size={14} />
+            <span className="mono text-xs">Delete Brick</span>
+          </button>
         )}
       </div>
     </div>

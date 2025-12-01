@@ -1,15 +1,19 @@
-import { Home, Target, Grid, Lock, Menu, X } from 'lucide-react';
+import { Home, Target, Grid, Lock, Menu, X, Moon, Sun, Settings } from 'lucide-react';
 import { useState } from 'react';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface NavigationProps {
   activeTab: 'home' | 'radar' | 'profile' | 'vault';
   onTabChange: (tab: 'home' | 'radar' | 'profile' | 'vault') => void;
   activeFilter?: 'all' | 'payroll' | 'network' | 'recent' | 'feed';
   onFilterChange?: (filter: 'all' | 'payroll' | 'network' | 'recent' | 'feed') => void;
+  onSettingsClick?: () => void;
 }
 
-export function Navigation({ activeTab, onTabChange, activeFilter, onFilterChange }: NavigationProps) {
+export function Navigation({ activeTab, onTabChange, activeFilter, onFilterChange, onSettingsClick }: NavigationProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { theme, toggleTheme, colors } = useTheme();
+
 
   const tabs = [
     { id: 'home', label: 'Foundation', icon: Home },
@@ -42,14 +46,15 @@ export function Navigation({ activeTab, onTabChange, activeFilter, onFilterChang
         }}
       >
         {/* Sidebar Header */}
-        <div className="p-6 border-b border-[#333333]">
+        <div className="p-6 border-b" style={{ borderColor: colors.border }}>
           <div className="flex items-center justify-between">
-            <h3 style={{ color: '#e0e0e0', fontSize: '1.25rem' }}>BRICK</h3>
+            <h3 style={{ color: colors.text.primary, fontSize: '1.25rem' }}>BRICK</h3>
             <button
               onClick={() => setSidebarOpen(false)}
-              className="w-8 h-8 rounded-full flex items-center justify-center transition-colors hover:bg-[#333333]"
+              className="w-8 h-8 rounded-full flex items-center justify-center transition-colors hover:opacity-80"
+              style={{ backgroundColor: colors.bg.secondary }}
             >
-              <X size={18} color="#a0a0a0" />
+              <X size={18} color={colors.text.secondary} />
             </button>
           </div>
         </div>
@@ -93,7 +98,7 @@ export function Navigation({ activeTab, onTabChange, activeFilter, onFilterChang
 
         {/* Sidebar Navigation */}
         <nav className="flex-1 p-4">
-          <p className="mono mb-3 px-4" style={{ color: '#666666', fontSize: '0.65rem', letterSpacing: '0.05em' }}>
+          <p className="mono mb-3 px-4" style={{ color: colors.text.tertiary, fontSize: '0.65rem', letterSpacing: '0.05em' }}>
             NAVIGATE
           </p>
           {tabs.map((tab) => {
@@ -107,7 +112,7 @@ export function Navigation({ activeTab, onTabChange, activeFilter, onFilterChang
                   onTabChange(tab.id);
                   setSidebarOpen(false);
                 }}
-                className="w-full flex items-center gap-4 px-4 py-3 rounded-xl mb-2 transition-all duration-200 hover:bg-[#252525]"
+                className="w-full flex items-center gap-4 px-4 py-3 rounded-xl mb-2 transition-all duration-200 hover:opacity-80"
                 style={{
                   backgroundColor: isActive ? 'rgba(211, 47, 47, 0.1)' : 'transparent',
                 }}
@@ -115,13 +120,13 @@ export function Navigation({ activeTab, onTabChange, activeFilter, onFilterChang
                 <Icon
                   size={20}
                   strokeWidth={2}
-                  color={isActive ? '#d32f2f' : '#a0a0a0'}
+                  color={isActive ? colors.accent : colors.text.secondary}
                   className="transition-colors"
                 />
                 <span
                   style={{
                     fontSize: '0.875rem',
-                    color: isActive ? '#d32f2f' : '#a0a0a0',
+                    color: isActive ? colors.accent : colors.text.secondary,
                     fontWeight: isActive ? 600 : 400,
                   }}
                 >
@@ -131,6 +136,54 @@ export function Navigation({ activeTab, onTabChange, activeFilter, onFilterChang
             );
           })}
         </nav>
+
+        {/* Theme Toggle & Settings - Sidebar Footer */}
+        <div className="p-4 border-t border-[#333333] space-y-2">
+          <button
+            onClick={onSettingsClick}
+            className="w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200 hover:bg-[#252525]"
+            style={{ backgroundColor: 'rgba(211, 47, 47, 0.05)' }}
+          >
+            <Settings size={20} strokeWidth={2} color="#d32f2f" />
+            <span style={{ fontSize: '0.875rem', color: '#d32f2f', fontWeight: 600 }}>Settings</span>
+          </button>
+          <button
+            onClick={toggleTheme}
+            className="w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200 hover:bg-[#252525]"
+            style={{ backgroundColor: 'rgba(211, 47, 47, 0.1)' }}
+          >
+            {theme === 'dark' ? (
+              <>
+                <Sun size={20} strokeWidth={2} color="#d32f2f" />
+                <span style={{ fontSize: '0.875rem', color: '#d32f2f', fontWeight: 600 }}>Light Mode</span>
+              </>
+            ) : (
+              <>
+                <Moon size={20} strokeWidth={2} color="#d32f2f" />
+                <span style={{ fontSize: '0.875rem', color: '#d32f2f', fontWeight: 600 }}>Dark Mode</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Mobile Theme Toggle - Bottom Nav */}
+      <div className="md:hidden fixed bottom-20 right-4 z-40">
+        <button
+          onClick={toggleTheme}
+          className="w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-110"
+          style={{
+            backgroundColor: colors.bg.secondary,
+            border: `1px solid ${colors.border}`,
+          }}
+          title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+        >
+          {theme === 'dark' ? (
+            <Sun size={20} color={colors.accent} strokeWidth={2} />
+          ) : (
+            <Moon size={20} color={colors.accent} strokeWidth={2} />
+          )}
+        </button>
       </div>
 
       {/* Sidebar Toggle Button - Desktop Only */}

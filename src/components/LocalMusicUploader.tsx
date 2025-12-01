@@ -1,3 +1,10 @@
+// Type declaration for jsmediatags library loaded via CDN
+declare global {
+  interface Window {
+    jsmediatags: any;
+  }
+}
+
 import { Upload, Music, Trash2, Play, Pause, Album, ListMusic } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 
@@ -29,41 +36,79 @@ interface LocalMusicUploaderProps {
 // IndexedDB helper functions
 const DB_NAME = 'BrickMusicDB';
 const STORE_NAME = 'localTracks';
-const DB_VERSION = 2;
+const DB_VERSION = 4;
 
 const openDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-    
+
+    request.onerror = () => {
+      console.error('Failed to open LocalMusicUploader DB:', request.error);
+      reject(request.error);
+    };
+    request.onsuccess = () => {
+      console.log('Successfully opened LocalMusicUploader DB');
+      resolve(request.result);
+    };
+
     request.onupgradeneeded = (event) => {
+      console.log('Upgrading LocalMusicUploader DB to version', DB_VERSION);
       const db = (event.target as IDBOpenDBRequest).result;
-      
+
       // Create localTracks store if it doesn't exist
       if (!db.objectStoreNames.contains(STORE_NAME)) {
+        console.log('Creating localTracks object store');
         db.createObjectStore(STORE_NAME, { keyPath: 'id' });
       }
-      
+
       // Create playlists store if it doesn't exist
       if (!db.objectStoreNames.contains('playlists')) {
+        console.log('Creating playlists object store');
         db.createObjectStore('playlists', { keyPath: 'id' });
+      }
+
+      // Create recentlyPlayedPlaylists store if it doesn't exist
+      if (!db.objectStoreNames.contains('recentlyPlayedPlaylists')) {
+        console.log('Creating recentlyPlayedPlaylists object store');
+        const store = db.createObjectStore('recentlyPlayedPlaylists', { keyPath: 'playlistId' });
+        store.createIndex('playedAt', 'playedAt', { unique: false });
+      }
+
+      // Create recentlyPlayedTracks store if it doesn't exist
+      if (!db.objectStoreNames.contains('recentlyPlayedTracks')) {
+        console.log('Creating recentlyPlayedTracks object store');
+        const store = db.createObjectStore('recentlyPlayedTracks', { keyPath: 'trackId' });
+        store.createIndex('playedAt', 'playedAt', { unique: false });
       }
     };
   });
 };
 
 const saveTrackToDB = async (track: any): Promise<void> => {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
+  try {
+    console.log('Saving track to DB:', track.id, track.name);
+
+    const db = await openDB();
     const transaction = db.transaction([STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
+
+    // Store the complete track object (including File) in IndexedDB
     const request = store.put(track);
-    
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
+
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => {
+        console.log('Successfully saved track to IndexedDB:', track.id);
+        resolve();
+      };
+      request.onerror = () => {
+        console.error('Error saving track to IndexedDB:', request.error);
+        reject(request.error);
+      };
+    });
+  } catch (error) {
+    console.error('Error saving track:', error);
+    throw error;
+  }
 };
 
 const getAllTracksFromDB = async (): Promise<any[]> => {
@@ -72,7 +117,7 @@ const getAllTracksFromDB = async (): Promise<any[]> => {
     const transaction = db.transaction([STORE_NAME], 'readonly');
     const store = transaction.objectStore(STORE_NAME);
     const request = store.getAll();
-    
+
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
@@ -84,7 +129,7 @@ const deleteTrackFromDB = async (id: string): Promise<void> => {
     const transaction = db.transaction([STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
     const request = store.delete(id);
-    
+
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
@@ -103,7 +148,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js';
     script.async = true;
     document.body.appendChild(script);
-    
+
     return () => {
       document.body.removeChild(script);
     };
@@ -113,30 +158,47 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
   useEffect(() => {
     const loadTracks = async () => {
       try {
+        console.log('Starting to load tracks from IndexedDB...');
+
         // Clear old localStorage data if it exists
         if (localStorage.getItem('brick_local_tracks')) {
           console.log('Migrating from localStorage to IndexedDB...');
           localStorage.removeItem('brick_local_tracks');
         }
-        
+
         const storedTracks = await getAllTracksFromDB();
-        
-        // Recreate blob URLs from stored File objects
-        const tracksWithUrls = storedTracks.map(track => ({
-          ...track,
-          url: URL.createObjectURL(track.file),
-        }));
-        
-        setLocalTracks(tracksWithUrls);
+        console.log('Retrieved tracks from IndexedDB:', storedTracks.length);
+
+        // Tracks are stored with File objects directly in IndexedDB
+        const tracksWithFiles: LocalTrack[] = storedTracks.map(track => {
+          try {
+            console.log('Processing track:', track.id, track.name);
+
+            // Create blob URL from the stored File object
+            const url = URL.createObjectURL(track.file);
+            console.log('Successfully created blob URL for track:', track.id);
+
+            return {
+              ...track,
+              url,
+            };
+          } catch (error) {
+            console.error('Failed to process track:', track.id, error);
+            return null;
+          }
+        }).filter(Boolean) as LocalTrack[];
+
+        console.log('Successfully loaded tracks:', tracksWithFiles.length);
+        setLocalTracks(tracksWithFiles);
       } catch (error) {
         console.error('Error loading local tracks from IndexedDB:', error);
       } finally {
         setIsLoading(false);
       }
     };
-    
+
     loadTracks();
-    
+
     // Cleanup: revoke blob URLs when component unmounts
     return () => {
       localTracks.forEach(track => {
@@ -151,12 +213,16 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
     const files = e.target.files;
     if (!files) return;
 
+    console.log('Processing', files.length, 'files...');
+
     const newTracks: LocalTrack[] = [];
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const format = file.name.split('.').pop()?.toUpperCase() || 'UNKNOWN';
       const url = URL.createObjectURL(file);
+
+      console.log('Processing file:', file.name, 'size:', file.size);
 
       // Extract metadata using jsmediatags
       const metadata = await new Promise<any>((resolve) => {
@@ -176,7 +242,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
       await new Promise((resolve) => {
         audio.addEventListener('loadedmetadata', () => {
           const tags = metadata?.tags || {};
-          
+
           // Extract album art if available
           let coverArt: string | undefined;
           if (tags.picture) {
@@ -188,8 +254,11 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
             coverArt = `data:${imgFormat};base64,${btoa(base64String)}`;
           }
 
+          const trackId = `local-${Date.now()}-${i}`;
+          console.log('Created track with ID:', trackId);
+
           newTracks.push({
-            id: `local-${Date.now()}-${i}`,
+            id: trackId,
             name: tags.title || file.name.replace(/\.(flac|wav|mp3)$/i, ''),
             artist: tags.artist || 'Unknown Artist',
             album: tags.album || 'Unknown Album',
@@ -210,6 +279,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
       });
     }
 
+    console.log('Adding', newTracks.length, 'new tracks to state');
     setLocalTracks([...localTracks, ...newTracks]);
     setIsExpanded(true);
 
@@ -219,20 +289,30 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
     }
 
     // Save new tracks to IndexedDB
-    newTracks.forEach(track => saveTrackToDB(track));
+    console.log('Saving tracks to database...');
+    for (const track of newTracks) {
+      try {
+        await saveTrackToDB(track);
+      } catch (error) {
+        console.error('Failed to save track:', track.id, error);
+      }
+    }
+    console.log('Finished saving tracks to database');
   };
 
   const handleDeleteTrack = async (trackId: string) => {
+    console.log('Deleting track:', trackId);
     const track = localTracks.find(t => t.id === trackId);
     if (track && track.url.startsWith('blob:')) {
       URL.revokeObjectURL(track.url);
     }
-    
+
     setLocalTracks(localTracks.filter(t => t.id !== trackId));
-    
+
     // Delete from IndexedDB
     try {
       await deleteTrackFromDB(trackId);
+      console.log('Successfully deleted track:', trackId);
     } catch (error) {
       console.error('Error deleting track from IndexedDB:', error);
     }

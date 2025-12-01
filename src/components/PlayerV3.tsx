@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Link2, X, ChevronLeft, ChevronRight, Crown, Users } from 'lucide-react';
 import { Track } from '../types';
+import { lastFmService, type LastFmArtistInfo } from '../utils/lastfm';
 
 interface PlayerV3Props {
   track: Track;
@@ -16,6 +17,21 @@ interface PlayerV3Props {
   duration?: number;
   formatTime?: (seconds: number) => string;
 }
+
+// Helper function to format duration
+const formatDuration = (duration: string | number): string => {
+  if (typeof duration === 'string') {
+    if (duration.includes(':')) return duration;
+    const secs = parseFloat(duration);
+    const mins = Math.floor(secs / 60);
+    const remainingSecs = Math.floor(secs % 60);
+    return `${mins}:${remainingSecs.toString().padStart(2, '0')}`;
+  } else {
+    const mins = Math.floor(duration / 60);
+    const secs = Math.floor(duration % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }
+};
 
 type PlayerView = 'lyrics' | 'playing' | 'bio';
 
@@ -38,27 +54,7 @@ export function PlayerV3({
   const [touchStart, setTouchStart] = useState(0);
   const [touchEnd, setTouchEnd] = useState(0);
 
-  const lyrics = `In the depths of concrete walls
-Where the echoes softly call
-Building dreams from brick and stone
-Finding strength we've always known
 
-Industrial soundscapes fill the air
-Melodies beyond compare
-In this fortress that we've made
-Our foundation will not fade
-
-[Chorus]
-Concrete dreams take flight tonight
-Through the shadows into light
-Every beat a brick we lay
-Building futures day by day`;
-
-  const artistBio = `${track.artist} is known for blending industrial sounds with ethereal melodies. Their work explores the intersection of urban architecture and human emotion.
-
-The album "${track.album}" reached critical acclaim, with tracks featured in numerous exhibitions and design showcases worldwide.
-
-Influenced by brutalist architecture and ambient music, this work represents a new wave of "structural sound design" - music that feels as permanent and substantial as the buildings that inspire it.`;
 
   const handleTouchStart = (e: React.TouchEvent) => {
     setTouchStart(e.touches[0].clientX);
@@ -242,7 +238,7 @@ Influenced by brutalist architecture and ambient music, this work represents a n
                 <div className="text-center mb-4">
                   <div className="w-16 h-16 rounded-full overflow-hidden mx-auto mb-3">
                     <img
-                      src="https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=200"
+                      src={artistInfo?.image || "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=200"}
                       alt={track.artist}
                       className="w-full h-full object-cover"
                     />
@@ -258,7 +254,7 @@ Influenced by brutalist architecture and ambient music, this work represents a n
                     lineHeight: '1.5',
                   }}
                 >
-                  {artistBio}
+                  {artistInfo?.bio || defaultArtistBio}
                 </p>
               </div>
             )}
@@ -329,6 +325,21 @@ Influenced by brutalist architecture and ambient music, this work represents a n
           >
             <p style={{ color: '#a0a0a0', fontSize: '0.875rem' }}>{track.album}</p>
           </button>
+
+          {/* Quality/Bit-rate Info */}
+          <div className="flex items-center justify-center gap-2 mt-1">
+            <span
+              className="mono px-2 py-0.5 rounded"
+              style={{
+                backgroundColor: track.quality === 'FLAC' ? 'rgba(198, 167, 0, 0.2)' : 'rgba(84, 110, 122, 0.2)',
+                color: track.quality === 'FLAC' ? '#c6a700' : '#546e7a',
+                fontSize: '0.65rem',
+                border: `1px solid ${track.quality === 'FLAC' ? '#c6a700' : '#546e7a'}`,
+              }}
+            >
+              {track.quality || 'MP3'}
+            </span>
+          </div>
         </div>
 
         {/* Progress Bar */}
@@ -348,7 +359,7 @@ Influenced by brutalist architecture and ambient music, this work represents a n
           </div>
           <div className="flex justify-between mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>
             <span>{formatTime(currentTime)}</span>
-            <span>{formatTime(duration)}</span>
+            <span>{formatDuration(track.duration)}</span>
           </div>
         </div>
 

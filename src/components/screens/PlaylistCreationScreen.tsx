@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { ArrowLeft, Plus, Trash2, Play, HardDrive, Music, X, GripVertical } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { ArrowLeft, Plus, Trash2, Play, HardDrive, Music, X, GripVertical, Upload, Image as ImageIcon } from 'lucide-react';
 import { ImageWithFallback } from '../figma/ImageWithFallback';
 
 interface PlaylistCreationScreenProps {
@@ -40,6 +40,9 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
   const [localTracks, setLocalTracks] = useState<LocalTrack[]>([]);
   const [viewMode, setViewMode] = useState<'platform' | 'local'>('platform');
   const [isLoadingLocal, setIsLoadingLocal] = useState(true);
+  const [draggedTrackId, setDraggedTrackId] = useState<string | null>(null);
+  const [customCoverImage, setCustomCoverImage] = useState<string | null>(null);
+  const coverImageInputRef = useRef<HTMLInputElement>(null);
 
   // Load local tracks from IndexedDB on mount
   useEffect(() => {
@@ -51,17 +54,28 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
       const db = await openDB();
       const transaction = db.transaction(['localTracks'], 'readonly');
       const store = transaction.objectStore('localTracks');
-      const allTracks = await new Promise<LocalTrack[]>((resolve, reject) => {
+      const allTracks = await new Promise<any[]>((resolve, reject) => {
         const request = store.getAll();
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
       });
 
-      // Recreate blob URLs for tracks
-      const tracksWithUrls = allTracks.map(track => ({
-        ...track,
-        url: URL.createObjectURL(track.file),
-      }));
+      // The tracks are stored as complete objects with File objects
+      // We need to recreate blob URLs for the UI
+      const tracksWithUrls: LocalTrack[] = allTracks.map(track => {
+        try {
+          // Create new blob URL from the File object
+          const url = URL.createObjectURL(track.file);
+
+          return {
+            ...track,
+            url, // Add the blob URL for the UI
+          };
+        } catch (error) {
+          console.error('Failed to create URL for track:', track.id, error);
+          return null;
+        }
+      }).filter(Boolean) as LocalTrack[];
 
       setLocalTracks(tracksWithUrls);
       setIsLoadingLocal(false);
@@ -73,22 +87,34 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
 
   const openDB = (): Promise<IDBDatabase> => {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open('BrickMusicDB', 2);
-      
+      const request = indexedDB.open('BrickMusicDB', 4);
+
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve(request.result);
-      
+
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
-        
+
         // Create localTracks store if it doesn't exist
         if (!db.objectStoreNames.contains('localTracks')) {
           db.createObjectStore('localTracks', { keyPath: 'id' });
         }
-        
+
         // Create playlists store if it doesn't exist
         if (!db.objectStoreNames.contains('playlists')) {
           db.createObjectStore('playlists', { keyPath: 'id' });
+        }
+
+        // Create recentlyPlayedPlaylists store if it doesn't exist
+        if (!db.objectStoreNames.contains('recentlyPlayedPlaylists')) {
+          const store = db.createObjectStore('recentlyPlayedPlaylists', { keyPath: 'playlistId' });
+          store.createIndex('playedAt', 'playedAt', { unique: false });
+        }
+
+        // Create recentlyPlayedTracks store if it doesn't exist
+        if (!db.objectStoreNames.contains('recentlyPlayedTracks')) {
+          const store = db.createObjectStore('recentlyPlayedTracks', { keyPath: 'trackId' });
+          store.createIndex('playedAt', 'playedAt', { unique: false });
         }
       };
     });
@@ -306,6 +332,56 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
     setStructuralIntegrity(integrity);
   };
 
+  const reorderTracks = (draggedId: string, targetId: string) => {
+    const draggedIndex = tracks.findIndex(t => t.id === draggedId);
+    const targetIndex = tracks.findIndex(t => t.id === targetId);
+    
+    if (draggedIndex === -1 || targetIndex === -1 || draggedIndex === targetIndex) return;
+    
+    const newTracks = [...tracks];
+    const draggedTrack = newTracks[draggedIndex];
+    newTracks.splice(draggedIndex, 1);
+    newTracks.splice(targetIndex, 0, draggedTrack);
+    
+    setTracks(newTracks);
+  };
+
+  const handleDragStart = (trackId: string) => {
+    setDraggedTrackId(trackId);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = (targetTrackId: string) => {
+    if (draggedTrackId && draggedTrackId !== targetTrackId) {
+      reorderTracks(draggedTrackId, targetTrackId);
+    }
+    setDraggedTrackId(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedTrackId(null);
+  };
+
+  const handleCoverImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const imageData = event.target?.result as string;
+        setCustomCoverImage(imageData);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const openCoverImagePicker = () => {
+    coverImageInputRef.current?.click();
+  };
+
   const canPublish = playlistName.length > 0 && tracks.length > 0 && structuralIntegrity >= 50;
 
   // Debug logging
@@ -358,6 +434,57 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
           />
         </div>
 
+        {/* Custom Cover Image */}
+        <div className="mb-6">
+          <label className="mono mb-2 block" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
+            BRICK COVER IMAGE
+          </label>
+          <div
+            className="p-4 rounded-lg border-2 border-dashed cursor-pointer transition-all hover:border-[#d32f2f]"
+            style={{
+              backgroundColor: '#252525',
+              borderColor: customCoverImage ? '#d32f2f' : '#333333',
+            }}
+            onClick={openCoverImagePicker}
+          >
+            {customCoverImage ? (
+              <div className="flex items-center gap-3">
+                <img
+                  src={customCoverImage}
+                  alt="Custom cover"
+                  className="w-16 h-16 rounded object-cover"
+                />
+                <div className="flex-1">
+                  <p style={{ color: '#e0e0e0', fontSize: '0.875rem' }}>Custom image selected</p>
+                  <p className="mono text-xs" style={{ color: '#a0a0a0' }}>Click to change</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-8">
+                <ImageIcon size={32} color="#546e7a" className="mb-2" />
+                <p style={{ color: '#e0e0e0', fontSize: '0.875rem' }}>Upload custom cover image</p>
+                <p className="mono text-xs" style={{ color: '#a0a0a0' }}>or drag and drop</p>
+              </div>
+            )}
+          </div>
+          <input
+            ref={coverImageInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleCoverImageUpload}
+            style={{ display: 'none' }}
+          />
+          {customCoverImage && (
+            <button
+              onClick={() => setCustomCoverImage(null)}
+              className="mt-2 w-full py-2 rounded text-xs transition-all"
+              style={{ backgroundColor: '#1a1a1a', border: '1px solid #333333', color: '#a0a0a0' }}
+            >
+              Remove custom image
+            </button>
+          )}
+        </div>
+
         {/* The Batch List */}
         <div className="mb-6">
           <h4 className="mb-3">The Batch ({tracks.length} tracks)</h4>
@@ -383,10 +510,22 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
               {tracks.map((track, index) => (
                 <div
                   key={track.id}
-                  className="flex items-center gap-3 p-3 border-b border-[#333333] last:border-b-0"
-                  style={{ backgroundColor: index % 2 === 0 ? '#252525' : '#222222' }}
+                  draggable
+                  onDragStart={() => handleDragStart(track.id)}
+                  onDragOver={handleDragOver}
+                  onDrop={() => handleDrop(track.id)}
+                  onDragEnd={handleDragEnd}
+                  className={`flex items-center gap-3 p-3 border-b border-[#333333] last:border-b-0 transition-colors ${
+                    draggedTrackId === track.id ? 'opacity-50' : ''
+                  }`}
+                  style={{ 
+                    backgroundColor: draggedTrackId === track.id 
+                      ? 'rgba(211, 47, 47, 0.1)' 
+                      : index % 2 === 0 ? '#252525' : '#222222',
+                    cursor: 'grab'
+                  }}
                 >
-                  <GripVertical size={16} color="#a0a0a0" className="cursor-grab" />
+                  <GripVertical size={16} color="#a0a0a0" className="cursor-grab flex-shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="truncate" style={{ color: '#e0e0e0', fontSize: '0.875rem' }}>
                       {track.title}
@@ -397,7 +536,7 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
                   </div>
                   <button
                     onClick={() => removeTrack(track.id)}
-                    className="p-1 hover:bg-[#333333] rounded transition-colors"
+                    className="p-1 hover:bg-[#333333] rounded transition-colors flex-shrink-0"
                   >
                     <X size={16} color="#a0a0a0" />
                   </button>
@@ -586,6 +725,13 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
               }));
               
               console.log('Publishing cleaned tracks:', cleanedTracks);
+              console.log('Custom cover image:', customCoverImage ? 'Present' : 'None');
+              
+              // Store custom cover image in localStorage temporarily for the handler
+              if (customCoverImage) {
+                sessionStorage.setItem('playlistCustomCover', customCoverImage);
+              }
+              
               onPublish(playlistName, cleanedTracks);
             }
           }}

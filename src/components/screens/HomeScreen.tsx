@@ -7,6 +7,7 @@ interface HomeScreenProps {
 }
 
 export function HomeScreen({ onPlaylistClick }: HomeScreenProps) {
+  const { colors } = useTheme();
   const chosenArtists = mockArtists.slice(0, 2);
   const connectionPlaylists = mockPlaylists.slice(0, 4);
   const recentPlaylists = mockPlaylists.slice(0, 3);
@@ -15,8 +16,8 @@ export function HomeScreen({ onPlaylistClick }: HomeScreenProps) {
     <div className="pb-24 px-6 pt-6">
       {/* Header */}
       <div className="mb-8">
-        <h2 className="mb-2">Good Morning, Architect.</h2>
-        <p style={{ color: '#a0a0a0' }}>Your foundation is growing stronger.</p>
+        <h2 className="mb-2" style={{ color: colors.text.primary }}>Good Morning, Architect.</h2>
+        <p style={{ color: colors.text.secondary }}>Your foundation is growing stronger.</p>
       </div>
 
       {/* The Payroll - Chosen Artists */}
@@ -51,7 +52,7 @@ export function HomeScreen({ onPlaylistClick }: HomeScreenProps) {
 
       {/* Recent Builds */}
       <section className="mb-6">
-        <h3 className="mb-4">Recent Builds</h3>
+        <h3 className="mb-4" style={{ color: colors.text.primary }}>Recent Builds</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {recentPlaylists.map((playlist) => (
             <BrickCard

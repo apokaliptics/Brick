@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { HeroCarousel } from '../HeroCarousel';
 import { NetworkStories } from '../NetworkStories';
 import { BrickCard } from '../BrickCard';
 import { LocalMusicUploader } from '../LocalMusicUploader';
 import { mockArtists, mockPlaylists, mockConnections } from '../../data/mockData';
+import { getRecentlyPlayedTracks, RecentlyPlayedTrack } from '../../utils/recentlyPlayed';
+import { getRecentlyPlayedPlaylists, RecentlyPlayedPlaylist } from '../../utils/recentlyPlayedPlaylists';
 import { Play, X, Grid3x3, Orbit } from 'lucide-react';
 
 interface HomeScreenV2Props {
@@ -30,14 +32,74 @@ export function HomeScreenV2({
   const [currentLocalTrack, setCurrentLocalTrack] = useState<any>(null);
   const [isLocalPlaying, setIsLocalPlaying] = useState(false);
   const [layoutMode, setLayoutMode] = useState<'brick' | 'spiral'>('brick');
+  const [recentPlaylists, setRecentPlaylists] = useState<RecentlyPlayedPlaylist[]>([]);
+  const [recentTracks, setRecentTracks] = useState<RecentlyPlayedTrack[]>([]);
+  const [loadingRecent, setLoadingRecent] = useState(true);
 
   // Use external filter state if provided, otherwise use internal state
   const activeFilter = externalActiveFilter !== undefined ? externalActiveFilter : internalActiveFilter;
   const onFilterChange = externalOnFilterChange || setInternalActiveFilter;
 
+  // Load recently played items
+  useEffect(() => {
+    console.log('HomeScreenV2 useEffect triggered - loading recent items');
+    let isMounted = true;
+
+    const loadRecentItems = async () => {
+      try {
+        console.log('Starting sequential loading of recent items...');
+        setLoadingRecent(true);
+
+        // Load playlists first
+        console.log('Loading recently played playlists...');
+        const playlists = await getRecentlyPlayedPlaylists(3);
+        console.log('Successfully loaded playlists:', playlists);
+
+        if (!isMounted) {
+          console.log('Component unmounted during playlist loading, aborting');
+          return;
+        }
+
+        // Load tracks second
+        console.log('Loading recently played tracks...');
+        const tracks = await getRecentlyPlayedTracks(3);
+        console.log('Successfully loaded tracks:', tracks);
+
+        if (!isMounted) {
+          console.log('Component unmounted during track loading, aborting');
+          return;
+        }
+
+        // Update state
+        console.log('Setting recent items state');
+        setRecentPlaylists(playlists);
+        setRecentTracks(tracks);
+        console.log('Recent items state updated successfully');
+
+      } catch (error) {
+        console.error('Failed to load recent items:', error);
+        if (isMounted) {
+          setRecentPlaylists([]);
+          setRecentTracks([]);
+        }
+      } finally {
+        if (isMounted) {
+          setLoadingRecent(false);
+          console.log('Loading recent items completed');
+        }
+      }
+    };
+
+    loadRecentItems();
+
+    return () => {
+      console.log('HomeScreenV2 useEffect cleanup - component unmounting');
+      isMounted = false;
+    };
+  }, []);
+
   const chosenArtists = mockArtists.slice(0, 2);
   const networkPlaylists = mockPlaylists.slice(0, 5);
-  const recentPlaylists = mockPlaylists.slice(0, 3);
 
   const handleFilterChange = (filter: 'all' | 'payroll' | 'network' | 'recent' | 'feed') => {
     if (filter === 'feed' && onFeedClick) {
@@ -266,48 +328,118 @@ export function HomeScreenV2({
               Recent Materials
             </h3>
 
-            <div className="space-y-3">
-              {recentPlaylists.map((playlist) => (
-                <button
-                  key={playlist.id}
-                  onClick={() => onPlaylistClick(playlist.id)}
-                  className="w-full flex items-center gap-4 p-3 rounded-xl transition-all duration-200 hover:bg-[#252525]"
-                  style={{
-                    backgroundColor: 'rgba(37, 37, 37, 0.5)',
-                  }}
-                >
-                  {/* Album Art */}
-                  <img
-                    src={playlist.coverImage}
-                    alt={playlist.name}
-                    className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
-                  />
-
-                  {/* Info */}
-                  <div className="flex-1 min-w-0 text-left">
-                    <h4 className="truncate mb-1" style={{ color: '#e0e0e0' }}>
-                      {playlist.name}
-                    </h4>
-                    <p
-                      className="truncate"
-                      style={{ color: '#a0a0a0', fontSize: '0.875rem' }}
-                    >
-                      {playlist.creator.name} • {playlist.trackCount} tracks
-                    </p>
-                  </div>
-
-                  {/* Play Button */}
-                  <div
-                    className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
+            {loadingRecent ? (
+              <div className="text-center py-8">
+                <p style={{ color: '#a0a0a0' }}>Loading recent materials...</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {/* Recently Played Playlists */}
+                {recentPlaylists.map((playlist: RecentlyPlayedPlaylist) => (
+                  <button
+                    key={`playlist-${playlist.playlistId}`}
+                    onClick={() => onPlaylistClick(playlist.playlistId)}
+                    className="w-full flex items-center gap-4 p-3 rounded-xl transition-all duration-200 hover:bg-[#252525]"
                     style={{
-                      backgroundColor: '#d32f2f',
+                      backgroundColor: 'rgba(37, 37, 37, 0.5)',
                     }}
                   >
-                    <Play size={16} fill="#e0e0e0" color="#e0e0e0" />
+                    {/* Album Art */}
+                    <img
+                      src={playlist.coverImage}
+                      alt={playlist.playlistName}
+                      className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
+                    />
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0 text-left">
+                      <h4 className="truncate mb-1" style={{ color: '#e0e0e0' }}>
+                        {playlist.playlistName}
+                      </h4>
+                      <p
+                        className="truncate"
+                        style={{ color: '#a0a0a0', fontSize: '0.875rem' }}
+                      >
+                        {typeof playlist.creatorName === 'string' ? playlist.creatorName : 'Your Collection'} • {playlist.trackCount} tracks
+                      </p>
+                    </div>
+
+                    {/* Play Button */}
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
+                      style={{
+                        backgroundColor: '#d32f2f',
+                      }}
+                    >
+                      <Play size={16} fill="#e0e0e0" color="#e0e0e0" />
+                    </div>
+                  </button>
+                ))}
+
+                {/* Recently Played Tracks */}
+                {recentTracks.map((track: RecentlyPlayedTrack) => (
+                  <button
+                    key={`track-${track.trackId}`}
+                    onClick={() => {
+                      // Handle track play - you might need to pass this up to parent
+                      if (onLocalTrackPlay) {
+                        onLocalTrackPlay({
+                          id: track.trackId,
+                          name: track.trackTitle,
+                          artist: track.artistName,
+                          coverArt: track.coverArt,
+                          url: track.audioUrl,
+                          duration: '0:00', // Will be updated by player
+                          format: 'MP3',
+                        });
+                      }
+                    }}
+                    className="w-full flex items-center gap-4 p-3 rounded-xl transition-all duration-200 hover:bg-[#252525]"
+                    style={{
+                      backgroundColor: 'rgba(37, 37, 37, 0.5)',
+                    }}
+                  >
+                    {/* Album Art */}
+                    <img
+                      src={track.coverArt}
+                      alt={track.trackTitle}
+                      className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
+                    />
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0 text-left">
+                      <h4 className="truncate mb-1" style={{ color: '#e0e0e0' }}>
+                        {track.trackTitle}
+                      </h4>
+                      <p
+                        className="truncate"
+                        style={{ color: '#a0a0a0', fontSize: '0.875rem' }}
+                      >
+                        {track.artistName}
+                      </p>
+                    </div>
+
+                    {/* Play Button */}
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
+                      style={{
+                        backgroundColor: '#d32f2f',
+                      }}
+                    >
+                      <Play size={16} fill="#e0e0e0" color="#e0e0e0" />
+                    </div>
+                  </button>
+                ))}
+
+                {/* Show message if no recent items */}
+                {recentPlaylists.length === 0 && recentTracks.length === 0 && (
+                  <div className="text-center py-8">
+                    <p style={{ color: '#a0a0a0' }}>No recent materials yet</p>
+                    <p style={{ color: '#666666', fontSize: '0.875rem' }}>Play some music to see it here</p>
                   </div>
-                </button>
-              ))}
-            </div>
+                )}
+              </div>
+            )}
           </div>
         </>
       );
@@ -428,7 +560,7 @@ export function HomeScreenV2({
     // RECENT VIEW
     if (activeFilter === 'recent') {
       return (
-        <div className="px-6 pt-8 pb-24">
+        <div className="px-6 pt-6 pb-24">
           {/* Header with Layout Toggle */}
           <div className="flex items-center justify-between mb-4">
             <h3 style={{ color: '#e0e0e0' }}>
@@ -462,29 +594,124 @@ export function HomeScreenV2({
             </div>
           </div>
 
-          {/* Render based on layout mode */}
-          {layoutMode === 'brick' ? (
-            <div className="grid grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2">
-              {recentPlaylists
-                .sort((a, b) => (b.structuralIntegrity || 0) - (a.structuralIntegrity || 0))
-                .map((playlist) => {
-                  const size = getCardSize(playlist.structuralIntegrity);
-                  return (
-                    <div
-                      key={playlist.id}
-                      className={size === 'large' ? 'col-span-2' : ''}
-                    >
-                      <BrickCard
-                        playlist={playlist}
-                        onClick={() => onPlaylistClick(playlist.id)}
-                        size="small"
-                      />
+          {/* Recently Played Tracks Section */}
+          {recentTracks.length > 0 && (
+            <div className="mb-8">
+              <h4 className="mb-4" style={{ color: '#e0e0e0' }}>
+                Recent Tracks
+              </h4>
+              <div className="space-y-3">
+                {recentTracks.map((track: RecentlyPlayedTrack) => (
+                  <button
+                    key={`track-${track.trackId}`}
+                    onClick={() => {
+                      // Handle track play - you might need to pass this up to parent
+                      if (onLocalTrackPlay) {
+                        onLocalTrackPlay({
+                          id: track.trackId,
+                          name: track.trackTitle,
+                          artist: track.artistName,
+                          coverArt: track.coverArt,
+                          url: track.audioUrl,
+                          duration: '0:00', // Will be updated by player
+                          format: 'MP3',
+                        });
+                      }
+                    }}
+                    className="w-full flex items-center gap-4 p-3 rounded-xl transition-all duration-200 hover:bg-[#252525]"
+                    style={{
+                      backgroundColor: 'rgba(37, 37, 37, 0.5)',
+                    }}
+                  >
+                    {/* Album Art */}
+                    <img
+                      src={track.coverArt}
+                      alt={track.trackTitle}
+                      className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
+                    />
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0 text-left">
+                      <h4 className="truncate mb-1" style={{ color: '#e0e0e0' }}>
+                        {track.trackTitle}
+                      </h4>
+                      <p
+                        className="truncate"
+                        style={{ color: '#a0a0a0', fontSize: '0.875rem' }}
+                      >
+                        {track.artistName}
+                      </p>
                     </div>
-                  );
-                })}
+
+                    {/* Play Button */}
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
+                      style={{
+                        backgroundColor: '#d32f2f',
+                      }}
+                    >
+                      <Play size={16} fill="#e0e0e0" color="#e0e0e0" />
+                    </div>
+                  </button>
+                ))}
+              </div>
             </div>
-          ) : (
-            renderSpiralLayout(recentPlaylists)
+          )}
+
+          {/* Recently Played Playlists Section */}
+          {recentPlaylists.length > 0 && (
+            <div className="mb-8">
+              <h4 className="mb-4" style={{ color: '#e0e0e0' }}>
+                Recent Playlists
+              </h4>
+
+              {/* Render based on layout mode */}
+              {layoutMode === 'brick' ? (
+                <div className="grid grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2">
+                  {recentPlaylists
+                    .sort((a, b) => (b.structuralIntegrity || 0) - (a.structuralIntegrity || 0))
+                    .map((playlist) => {
+                      // Convert RecentlyPlayedPlaylist to Playlist format for BrickCard
+                      const playlistForCard = {
+                        id: playlist.playlistId,
+                        name: playlist.playlistName,
+                        coverImage: playlist.coverImage,
+                        creator: playlist.creatorName,
+                        trackCount: playlist.trackCount,
+                        structuralIntegrity: playlist.structuralIntegrity || 50,
+                      };
+                      const size = getCardSize(playlist.structuralIntegrity);
+                      return (
+                        <div
+                          key={playlist.playlistId}
+                          className={size === 'large' ? 'col-span-2' : ''}
+                        >
+                          <BrickCard
+                            playlist={playlistForCard}
+                            onClick={() => onPlaylistClick(playlist.playlistId)}
+                            size="small"
+                          />
+                        </div>
+                      );
+                    })}
+                </div>
+              ) : (
+                renderSpiralLayout(recentPlaylists.map(p => ({
+                  id: p.playlistId,
+                  name: p.playlistName,
+                  coverImage: p.coverImage,
+                  structuralIntegrity: p.structuralIntegrity || 50,
+                })))
+              )}
+            </div>
+          )}
+
+          {/* Show message if no recent items */}
+          {recentPlaylists.length === 0 && recentTracks.length === 0 && (
+            <div className="text-center py-12">
+              <p style={{ color: '#a0a0a0' }}>No recently played items yet</p>
+              <p style={{ color: '#666666', fontSize: '0.875rem' }}>Play some music to see it here</p>
+            </div>
           )}
         </div>
       );
@@ -492,7 +719,7 @@ export function HomeScreenV2({
   };
 
   return (
-    <div className="min-h-screen pt-6 md:pt-16">
+    <div className={`min-h-screen ${(activeFilter === 'network' || activeFilter === 'recent' || activeFilter === 'feed') ? 'pt-6 md:pt-16' : ''}`}>
       {/* Dynamic Content */}
       {renderContent()}
     </div>
