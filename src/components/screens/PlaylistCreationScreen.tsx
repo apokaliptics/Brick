@@ -43,6 +43,59 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
   const [draggedTrackId, setDraggedTrackId] = useState<string | null>(null);
   const [customCoverImage, setCustomCoverImage] = useState<string | null>(null);
   const coverImageInputRef = useRef<HTMLInputElement>(null);
+  
+  // Uncommitted changes detection
+  const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false);
+  
+  // Check if there are uncommitted changes
+  const hasUncommittedChanges = playlistName.length > 0 || tracks.length > 0 || customCoverImage !== null;
+  
+  // Handle close with uncommitted changes check
+  const handleCloseAttempt = () => {
+    if (hasUncommittedChanges) {
+      setShowUnsavedChangesDialog(true);
+    } else {
+      onClose();
+    }
+  };
+  
+  // Handle discard changes
+  const handleDiscardChanges = () => {
+    setShowUnsavedChangesDialog(false);
+    onClose();
+  };
+  
+  // Handle keyboard escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (hasUncommittedChanges) {
+          setShowUnsavedChangesDialog(true);
+        } else {
+          onClose();
+        }
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [hasUncommittedChanges, onClose]);
+  
+  // Warn before browser/tab close with uncommitted changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUncommittedChanges) {
+        e.preventDefault();
+        // Modern browsers require returnValue to be set
+        e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+        return e.returnValue;
+      }
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUncommittedChanges]);
 
   // Load local tracks from IndexedDB on mount
   useEffect(() => {
@@ -406,7 +459,7 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
         }}
       >
         <div className="flex items-center justify-between">
-          <button onClick={onClose} className="p-2">
+          <button onClick={handleCloseAttempt} className="p-2">
             <X size={24} color="#a0a0a0" />
           </button>
           <h3 style={{ color: '#e0e0e0' }}>Firing New Brick</h3>
@@ -749,6 +802,50 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
           Fire Brick (Publish)
         </button>
       </div>
+      
+      {/* Unsaved Changes Confirmation Dialog */}
+      {showUnsavedChangesDialog && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60">
+          <div
+            className="w-full max-w-sm mx-4 rounded-lg p-6"
+            style={{
+              backgroundColor: '#1a1a1a',
+              border: '1px solid #333333',
+              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
+            }}
+          >
+            <h3 className="text-lg font-semibold mb-2" style={{ color: '#e0e0e0' }}>
+              Uncommitted Changes Detected
+            </h3>
+            <p className="mb-6" style={{ color: '#a0a0a0', fontSize: '0.875rem' }}>
+              You have unsaved changes. Are you sure you want to discard them?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowUnsavedChangesDialog(false)}
+                className="flex-1 py-3 rounded-lg transition-all"
+                style={{
+                  backgroundColor: '#252525',
+                  color: '#e0e0e0',
+                  border: '1px solid #333333',
+                }}
+              >
+                Keep Editing
+              </button>
+              <button
+                onClick={handleDiscardChanges}
+                className="flex-1 py-3 rounded-lg transition-all"
+                style={{
+                  background: 'linear-gradient(to bottom, #d32f2f, #b71c1c)',
+                  color: '#e0e0e0',
+                }}
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
