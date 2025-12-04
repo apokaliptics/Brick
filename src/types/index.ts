@@ -2,6 +2,7 @@ export interface User {
   id: string;
   name: string;
   avatar: string;
+  bio?: string;
   diversityScore: number;
   connectionsUsed: number;
   connectionsMax: number;
@@ -55,6 +56,11 @@ export interface Track {
   audioUrl?: string;
   isPatronage?: boolean;
   genre?: string;
+  bitDepth?: number;
+  sampleRate?: number;
+  bitrateKbps?: number;
+  codecLabel?: string;
+  file?: File;
 }
 
 export interface Connection {

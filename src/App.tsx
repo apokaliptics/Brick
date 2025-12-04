@@ -24,6 +24,7 @@ import { UserSettingsModal } from './components/modals/UserSettingsModal';
 import { ImageWithFallback } from './components/figma/ImageWithFallback';
 import { logoutUser } from './utils/auth';
 import { formatBitrate } from './utils/audioMetaHelpers';
+import { useTrackAudioMeta } from './hooks/useTrackAudioMeta';
 import { mockPlaylists, mockTracks, mockCurrentUser, mockArtists, mockConnections } from './data/mockData';
 import type { Track, Playlist, Screen, User } from './types';
 import { addRecentlyPlayedPlaylist } from './utils/recentlyPlayedPlaylists';
@@ -92,6 +93,19 @@ export default function App() {
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [musicPlayerControls, setMusicPlayerControls] = useState<any>(null);
   const [isPink, setIsPink] = useState(false);
+
+  const nowPlayingTrack = currentTrack ?? currentPlayingTrack;
+  const nowPlayingMeta = useTrackAudioMeta(nowPlayingTrack);
+  const codecBadge = nowPlayingMeta?.codecLabel
+    ?? nowPlayingTrack?.codecLabel
+    ?? nowPlayingTrack?.quality?.toUpperCase();
+  const bitDepthBadge = nowPlayingMeta?.bitDepth ?? nowPlayingTrack?.bitDepth;
+  const sampleRateBadge = nowPlayingMeta?.sampleRate ?? nowPlayingTrack?.sampleRate;
+  const bitrateBadge = nowPlayingMeta?.bitrateKbps ?? nowPlayingTrack?.bitrateKbps;
+  const isLocalSource = Boolean(
+    nowPlayingTrack?.file ||
+    (nowPlayingTrack?.audioUrl && !String(nowPlayingTrack.audioUrl).startsWith('http'))
+  );
 
   useEffect(() => {
     if (!pinkTierUnlocked && isPink) {
@@ -819,13 +833,6 @@ export default function App() {
             }}
           >
                 {/* Sidebar Content - Scrollable */}
-                {/* Derive live audio metadata from the Track used by players */}
-                {/* Use `currentTrack` which is a `Track` type feeding players; fallback if needed */}
-                
-                {/* Hooks must be called unconditionally and at the top level */}
-                {/** Build a stable track reference for the metadata hook */}
-                
-                
                 <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 flex flex-col items-center" style={{ width: '100%', maxWidth: 'min(320px, 100%)', minWidth: 0 }}>
                   <p className="mono mb-3 px-2 text-center" style={{ color: '#666666', fontSize: '0.65rem', letterSpacing: '0.05em' }}>NOW PLAYING</p>
 
@@ -854,9 +861,7 @@ export default function App() {
                     {/* Audio quality chips under cover */}
                     {/* Do not use hooks here; read from currentTrack/currentPlayingTrack props */}
                     <div className="flex items-center justify-center gap-2 mb-3">
-                      {(() => {
-                        const codec = currentTrack?.codecLabel ?? currentPlayingTrack?.codecLabel ?? (currentTrack?.quality === 'FLAC' ? 'FLAC' : undefined);
-                        return codec ? (
+                      {codecBadge && (
                         <span
                           className="mono px-2 py-0.5 rounded"
                           style={{
@@ -867,33 +872,22 @@ export default function App() {
                             minWidth: '72px'
                           }}
                         >
-                          {String(codec).toUpperCase()}
+                          {String(codecBadge).toUpperCase()}
                         </span>
-                        ) : null;
-                      })()}
-                      {(() => {
-                        // Source badge: Local vs Cloud
-                        const isLocal = !!(currentTrack?.file || currentPlayingTrack?.file) || !!(currentTrack?.audioUrl && !String(currentTrack.audioUrl).startsWith('http')) || !!(currentPlayingTrack?.audioUrl && !String(currentPlayingTrack.audioUrl).startsWith('http'));
-                        const label = isLocal ? 'Local' : 'Cloud';
-                        return (
-                          <span
-                            className="mono px-2 py-0.5 rounded flex items-center gap-1"
-                            style={{
-                              border: '1px solid #333333',
-                              background: 'rgba(26,26,26,0.6)',
-                              color: '#e0e0e0',
-                              fontSize: '0.7rem'
-                            }}
-                          >
-                            {isLocal ? <HardDrive size={12} color="#e0e0e0" /> : <Cloud size={12} color="#e0e0e0" />}
-                            {label}
-                          </span>
-                        );
-                      })()}
-                      {(() => {
-                        const bitDepth = currentTrack?.bitDepth ?? currentPlayingTrack?.bitDepth;
-                        const sampleRate = currentTrack?.sampleRate ?? currentPlayingTrack?.sampleRate;
-                        return (bitDepth || sampleRate) ? (
+                      )}
+                      <span
+                        className="mono px-2 py-0.5 rounded flex items-center gap-1"
+                        style={{
+                          border: '1px solid #333333',
+                          background: 'rgba(26,26,26,0.6)',
+                          color: '#e0e0e0',
+                          fontSize: '0.7rem'
+                        }}
+                      >
+                        {isLocalSource ? <HardDrive size={12} color="#e0e0e0" /> : <Cloud size={12} color="#e0e0e0" />}
+                        {isLocalSource ? 'Local' : 'Cloud'}
+                      </span>
+                      {(bitDepthBadge || sampleRateBadge) && (
                         <span
                           className="mono px-2 py-0.5 rounded"
                           style={{
@@ -903,15 +897,12 @@ export default function App() {
                             fontSize: '0.7rem'
                           }}
                         >
-                          {bitDepth ? `${bitDepth}-bit` : ''}
-                          {bitDepth && sampleRate ? ' / ' : ''}
-                          {sampleRate ? `${sampleRate}kHz` : ''}
+                          {bitDepthBadge ? `${bitDepthBadge}-bit` : ''}
+                          {bitDepthBadge && sampleRateBadge ? ' / ' : ''}
+                          {sampleRateBadge ? `${sampleRateBadge}kHz` : ''}
                         </span>
-                        ) : null;
-                      })()}
-                      {(() => {
-                        const bitrate = currentTrack?.bitrateKbps ?? currentPlayingTrack?.bitrateKbps;
-                        return bitrate ? (
+                      )}
+                      {bitrateBadge && (
                         <span
                           className="mono px-2 py-0.5 rounded"
                           style={{
@@ -921,10 +912,9 @@ export default function App() {
                             fontSize: '0.7rem'
                           }}
                         >
-                          {formatBitrate(bitrate)}
+                          {formatBitrate(bitrateBadge)}
                         </span>
-                        ) : null;
-                      })()}
+                      )}
                     </div>
                     <p
                       style={{ color: '#e0e0e0' }}
