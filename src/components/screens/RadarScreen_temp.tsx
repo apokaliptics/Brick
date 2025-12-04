@@ -143,12 +143,21 @@ export function RadarScreen({ onUserClick, onTrackClick }: RadarScreenProps) {
   }, [searchMode]);
 
 
-  // Add mock x/y coordinates to connections for radar visualization
-  const mockUsers: Connection[] = mockConnections.map((conn, i) => ({
-    ...conn,
-    x: 50 + Math.cos((i / mockConnections.length) * Math.PI * 2) * 30,
-    y: 50 + Math.sin((i / mockConnections.length) * Math.PI * 2) * 30,
-  }));
+  // Sort connections by matchScore (highest first) and position them by proximity to center
+  const sortedConnections = [...mockConnections].sort((a, b) => b.matchScore - a.matchScore);
+  
+  // Add x/y coordinates to connections for radar visualization
+  // Higher matchScore = closer to center (smaller radius)
+  const mockUsers: Connection[] = sortedConnections.map((conn, i) => {
+    // Map matchScore (0-100) to radius (5-40), higher score = smaller radius
+    const radius = 40 - (conn.matchScore / 100) * 35; // 5 to 40 range
+    const angle = (i / sortedConnections.length) * Math.PI * 2;
+    return {
+      ...conn,
+      x: 50 + Math.cos(angle) * radius,
+      y: 50 + Math.sin(angle) * radius,
+    };
+  });
 
   // Filter users based on search query
   const filteredUsers = mockUsers.filter(user =>

@@ -2,8 +2,13 @@ import { Users, Music, Crown, Heart, TrendingUp, Send } from 'lucide-react';
 import { useState } from 'react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { mockFeedEvents, mockConnections, mockArtists } from '../../data/mockData';
+import type { User } from '../../types';
 
-export function FeedScreen() {
+interface FeedScreenProps {
+  currentUser?: User | null;
+}
+
+export function FeedScreen({ currentUser }: FeedScreenProps) {
   const { colors } = useTheme();
   const [postContent, setPostContent] = useState('');
   const [posts, setPosts] = useState<Array<{ id: string; content: string; user: any; timestamp: string; likes: number }>>([]);
@@ -15,8 +20,8 @@ export function FeedScreen() {
       id: Date.now().toString(),
       content: postContent,
       user: {
-        name: 'You',
-        avatar: 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=100',
+        name: currentUser?.name || 'You',
+        avatar: currentUser?.avatar || 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=100',
       },
       timestamp: new Date().toISOString(),
       likes: 0,
@@ -103,8 +108,8 @@ export function FeedScreen() {
         >
           <div className="flex items-start gap-4">
             <img
-              src="https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=100"
-              alt="Your avatar"
+              src={currentUser?.avatar || 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=100'}
+              alt={`${currentUser?.name || 'Your'} avatar`}
               className="w-10 h-10 rounded-full"
             />
             <div className="flex-1">

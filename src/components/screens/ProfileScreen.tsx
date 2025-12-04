@@ -1,21 +1,49 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Home, User, Layout, Search, Heart, Plus, X, Music, ChevronLeft, Play, HardDrive, Grid3x3, Orbit, Trash2 } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
-import { Playlist } from '../../types';
+import { Playlist, User as UserType } from '../../types';
 import { ImageWithFallback } from '../figma/ImageWithFallback';
 import { BrickCard } from '../BrickCard';
 import { mockPlaylists, mockCurrentUser } from '../../data/mockData';
+import pinkStyles from '../../styles/pinkTier.module.css';
 
 interface ProfileScreenProps {
   onPlaylistClick: (playlistId: string) => void;
+  onCreatePlaylist?: () => void;
+  currentUser?: UserType | null;
+  isPinkMode?: boolean;
+  onPinkToggle?: (value: boolean) => void;
+  pinkTierUnlocked?: boolean;
 }
 
-export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
+export function ProfileScreen({ onPlaylistClick, onCreatePlaylist, currentUser, isPinkMode = false, onPinkToggle, pinkTierUnlocked = false }: ProfileScreenProps) {
   const { colors } = useTheme();
   const userPlaylists = mockPlaylists;
   const [layoutMode, setLayoutMode] = useState<'brick' | 'spiral'>('brick');
   const [wallView, setWallView] = useState<'online' | 'local'>('online');
   const [localPlaylists, setLocalPlaylists] = useState<Playlist[]>([]);
+  const [authenticityScore, setAuthenticityScore] = useState<number>(0);
+
+  // Calculate authenticity score from online playlists
+  useEffect(() => {
+    const onlinePlaylists = wallView === 'online' ? userPlaylists : [];
+    if (onlinePlaylists.length > 0) {
+      const total = onlinePlaylists.reduce((sum, playlist) => {
+        return sum + (playlist.structuralIntegrity || 0);
+      }, 0);
+      const average = Math.round(total / onlinePlaylists.length);
+      setAuthenticityScore(average);
+      
+      // Update user's diversity score if currentUser exists
+      if (currentUser && average !== currentUser.diversityScore) {
+        import('../../utils/auth').then(({ updateUser }) => {
+          updateUser({ ...currentUser, diversityScore: average }).catch(console.error);
+        });
+      }
+    } else {
+      setAuthenticityScore(0);
+    }
+  }, [userPlaylists, wallView, currentUser]);
 
   // Load local playlists from IndexedDB
   useEffect(() => {
@@ -324,20 +352,197 @@ export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
     );
   };
 
+  const displayUser = currentUser || mockCurrentUser;
+  const [isEditingAvatar, setIsEditingAvatar] = useState(false);
+  const [isEditingBio, setIsEditingBio] = useState(false);
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [bioText, setBioText] = useState(displayUser.bio || '');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleAvatarFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && file.type.startsWith('image/')) {
+      setAvatarFile(file);
+    }
+  };
+
+  const handleAvatarUpdate = async () => {
+    if (!currentUser || !avatarFile) return;
+    
+    try {
+      // Convert image to base64
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64String = reader.result as string;
+        const { updateUser } = await import('../../utils/auth');
+        await updateUser({ ...currentUser, avatar: base64String });
+        window.location.reload(); // Refresh to show new avatar
+      };
+      reader.readAsDataURL(avatarFile);
+    } catch (error) {
+      console.error('Failed to update avatar:', error);
+    }
+  };
+
+  const handleBioUpdate = async () => {
+    if (!currentUser) return;
+    
+    try {
+      const { updateUser } = await import('../../utils/auth');
+      await updateUser({ ...currentUser, bio: bioText });
+      window.location.reload(); // Refresh to show updated bio
+    } catch (error) {
+      console.error('Failed to update bio:', error);
+    }
+  };
+
+  const handlePinkToggle = () => {
+    if (!pinkTierUnlocked || !onPinkToggle) return;
+    onPinkToggle(!isPinkMode);
+  };
+
   return (
     <div className="pb-24 px-6 pt-10">
+      <div className={pinkStyles.wallHeader}>
+        <h1 className={`${pinkStyles.wallTitle} ${isPinkMode ? pinkStyles.pinkWallTitle : ''}`}>
+          MY WALL
+        </h1>
+        {pinkTierUnlocked && (
+          <div className={pinkStyles.toggleStack}>
+            <div className={pinkStyles.toggleShell}>
+              <span className={pinkStyles.toggleLabel}>THE WALL THEME</span>
+              <button
+                type="button"
+                aria-pressed={isPinkMode}
+                onClick={handlePinkToggle}
+                className={`${pinkStyles.toggleControl} ${isPinkMode ? pinkStyles.toggleControlActive : ''}`}
+              >
+                <span className={`${pinkStyles.toggleThumb} ${isPinkMode ? pinkStyles.toggleThumbActive : ''}`} />
+              </button>
+            </div>
+            <span className={pinkStyles.toggleHint}>
+              {isPinkMode ? 'Pink Tier engaged' : 'Industrial base coat'}
+            </span>
+          </div>
+        )}
+      </div>
       {/* Profile Header */}
       <div className="mb-8 text-center">
-        <img
-          src={mockCurrentUser.avatar}
-          alt={mockCurrentUser.name}
-          className="w-24 h-24 rounded-full mx-auto mb-4"
-          style={{
-            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
-          }}
-        />
-        <h2 className="mb-1" style={{ color: colors.text.primary }}>{mockCurrentUser.name}</h2>
-        <p style={{ color: colors.text.secondary }}>{mockCurrentUser.tier} Tier</p>
+        <div className="relative inline-block">
+          <img
+            src={displayUser.avatar}
+            alt={displayUser.name}
+            onClick={() => currentUser && setIsEditingAvatar(!isEditingAvatar)}
+            className="w-24 h-24 rounded-full mx-auto mb-4 cursor-pointer hover:opacity-80 transition-opacity"
+            style={{
+              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
+            }}
+          />
+        </div>
+        
+        {isEditingAvatar && currentUser && (
+          <div className="mt-4 flex flex-col gap-2 items-center">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleAvatarFileChange}
+              className="hidden"
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-4 py-2 rounded"
+              style={{
+                backgroundColor: colors.bg.secondary,
+                border: `1px solid ${colors.border}`,
+                color: colors.text.primary,
+              }}
+            >
+              {avatarFile ? avatarFile.name : 'Choose Image'}
+            </button>
+            {avatarFile && (
+              <button
+                onClick={handleAvatarUpdate}
+                className="px-4 py-2 rounded"
+                style={{
+                  backgroundColor: '#d32f2f',
+                  color: colors.text.primary,
+                }}
+              >
+                Upload & Save
+              </button>
+            )}
+          </div>
+        )}
+        
+        <h2 className="mb-1" style={{ color: colors.text.primary }}>{displayUser.name}</h2>
+        <p style={{ color: colors.text.secondary }}>{displayUser.tier} Tier</p>
+        
+        {/* Bio Section */}
+        <div className="mt-4 max-w-md mx-auto">
+          {isEditingBio && currentUser ? (
+            <div className="flex flex-col gap-2">
+              <textarea
+                value={bioText}
+                onChange={(e) => setBioText(e.target.value)}
+                placeholder="Tell us about yourself..."
+                className="px-3 py-2 rounded resize-none"
+                rows={3}
+                style={{
+                  backgroundColor: colors.bg.secondary,
+                  border: `1px solid ${colors.border}`,
+                  color: colors.text.primary,
+                }}
+              />
+              <div className="flex gap-2 justify-center">
+                <button
+                  onClick={handleBioUpdate}
+                  className="px-4 py-2 rounded"
+                  style={{
+                    backgroundColor: '#d32f2f',
+                    color: colors.text.primary,
+                  }}
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => setIsEditingBio(false)}
+                  className="px-4 py-2 rounded"
+                  style={{
+                    backgroundColor: colors.bg.tertiary,
+                    color: colors.text.secondary,
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center gap-2">
+              <p
+                className="text-sm italic"
+                style={{ color: colors.text.secondary }}
+              >
+                {displayUser.bio || 'No bio yet'}
+              </p>
+              {currentUser && (
+                <button
+                  onClick={() => {
+                    setBioText(displayUser.bio || '');
+                    setIsEditingBio(true);
+                  }}
+                  className="text-xs px-2 py-1 rounded"
+                  style={{
+                    backgroundColor: colors.bg.secondary,
+                    color: colors.text.secondary,
+                  }}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Stats */}
@@ -369,7 +574,7 @@ export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
                 stroke="url(#diversity-gradient)"
                 strokeWidth="8"
                 fill="none"
-                strokeDasharray={`${(mockCurrentUser.diversityScore / 100) * 220} 220`}
+                strokeDasharray={`${(authenticityScore / 100) * 220} 220`}
                 strokeLinecap="round"
               />
               <defs>
@@ -381,7 +586,7 @@ export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
             </svg>
             <div className="absolute inset-0 flex items-center justify-center">
               <span className="mono" style={{ color: colors.text.primary, fontSize: '1.5rem' }}>
-                {mockCurrentUser.diversityScore}
+                {authenticityScore}
               </span>
             </div>
           </div>
@@ -402,21 +607,21 @@ export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
         >
           <div className="mb-3">
             <span className="mono" style={{ color: '#e0e0e0', fontSize: '2rem' }}>
-              {mockCurrentUser.connectionsUsed}
+              {displayUser.connectionsUsed}
             </span>
             <span className="mono" style={{ color: '#a0a0a0', fontSize: '1.2rem' }}>
-              /{mockCurrentUser.connectionsMax}
+              /{displayUser.connectionsMax}
             </span>
           </div>
           <h4 style={{ color: '#e0e0e0' }}>Connections</h4>
           <div className="flex justify-center gap-1 mt-2">
-            {Array.from({ length: mockCurrentUser.connectionsMax }).map((_, i) => (
+            {Array.from({ length: displayUser.connectionsMax }).map((_, i) => (
               <div
                 key={i}
                 className="w-2 h-2 rounded-full"
                 style={{
                   backgroundColor:
-                    i < mockCurrentUser.connectionsUsed ? '#546e7a' : '#1a1a1a',
+                    i < displayUser.connectionsUsed ? '#546e7a' : '#1a1a1a',
                 }}
               />
             ))}
@@ -462,8 +667,19 @@ export function ProfileScreen({ onPlaylistClick }: ProfileScreenProps) {
             </div>
           </div>
           
-          {/* Layout Mode Toggle */}
+          {/* Create Playlist + Layout Mode Toggle */}
           <div className="flex gap-2">
+            <button
+              onClick={() => onCreatePlaylist && onCreatePlaylist()}
+              className="p-2 rounded-lg transition-all duration-200 hover:scale-105"
+              style={{
+                backgroundColor: 'rgba(211, 47, 47, 0.15)',
+                border: '1px solid #d32f2f',
+              }}
+              title="Create Playlist"
+            >
+              <Plus size={18} color="#d32f2f" />
+            </button>
             <button
               onClick={() => setLayoutMode('brick')}
               className="p-2 rounded-lg transition-all duration-200"

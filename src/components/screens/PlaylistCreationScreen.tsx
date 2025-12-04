@@ -1,23 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Plus, Trash2, Play, HardDrive, Music, X, GripVertical, Upload, Image as ImageIcon } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Play, HardDrive, Music, X, GripVertical, Upload, Image as ImageIcon, Search } from 'lucide-react';
 import { ImageWithFallback } from '../figma/ImageWithFallback';
+import type { Track } from '../../types';
 
 interface PlaylistCreationScreenProps {
   onClose: () => void;
   onPublish: (name: string, tracks: Track[]) => void;
-}
-
-interface Track {
-  id: string;
-  title: string;
-  artist: string;
-  album: string;
-  duration: string;
-  quality: string;
-  coverArt: string;
-  audioUrl?: string;
-  isPatronage: boolean;
-  genre?: string;
 }
 
 interface LocalTrack {
@@ -31,6 +19,10 @@ interface LocalTrack {
   format: string;
   coverArt?: string;
   genre?: string;
+  bitDepth?: number;
+  sampleRate?: number;
+  bitrateKbps?: number;
+  codecLabel?: string;
 }
 
 export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationScreenProps) {
@@ -39,10 +31,13 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
   const [structuralIntegrity, setStructuralIntegrity] = useState(0);
   const [localTracks, setLocalTracks] = useState<LocalTrack[]>([]);
   const [viewMode, setViewMode] = useState<'platform' | 'local'>('platform');
+  const [searchQuery, setSearchQuery] = useState('');
   const [isLoadingLocal, setIsLoadingLocal] = useState(true);
   const [draggedTrackId, setDraggedTrackId] = useState<string | null>(null);
   const [customCoverImage, setCustomCoverImage] = useState<string | null>(null);
   const coverImageInputRef = useRef<HTMLInputElement>(null);
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [page, setPage] = useState<number>(1);
 
   // Load local tracks from IndexedDB on mount
   useEffect(() => {
@@ -317,6 +312,11 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
       audioUrl: localTrack.url,
       isPatronage: false,
       genre: localTrack.genre, // Pass through genre from local track
+      bitDepth: localTrack.bitDepth,
+      sampleRate: localTrack.sampleRate,
+      bitrateKbps: localTrack.bitrateKbps,
+      codecLabel: localTrack.codecLabel,
+      file: localTrack.file,
     };
     
     console.log('Converted track:', track);
@@ -384,6 +384,33 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
 
   const canPublish = playlistName.length > 0 && tracks.length > 0 && structuralIntegrity >= 50;
 
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const hasSearch = normalizedSearch.length > 0;
+  const matchesQuery = (value?: string | null) => {
+    if (!hasSearch || !value) return false;
+    return value.toLowerCase().includes(normalizedSearch);
+  };
+
+  const filteredPlatformTracks = hasSearch
+    ? availableTracks.filter((track) =>
+        matchesQuery(track.title) ||
+        matchesQuery(track.name) ||
+        matchesQuery(track.artist) ||
+        matchesQuery(track.album) ||
+        matchesQuery(track.genre),
+      )
+    : availableTracks;
+
+  const filteredLocalTracks = hasSearch
+    ? localTracks.filter((track) =>
+        matchesQuery(track.name) ||
+        matchesQuery(track.artist) ||
+        matchesQuery(track.album) ||
+        matchesQuery(track.genre) ||
+        matchesQuery(track.format),
+      )
+    : localTracks;
+
   // Debug logging
   useEffect(() => {
     console.log('=== Fire Brick Debug ===');
@@ -409,7 +436,7 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
           <button onClick={onClose} className="p-2">
             <X size={24} color="#a0a0a0" />
           </button>
-          <h3 style={{ color: '#e0e0e0' }}>Firing New Brick</h3>
+          <h3 style={{ color: '#e0e0e0' }}>Drawing New Blueprints</h3>
           <div className="w-10" />
         </div>
       </div>
@@ -580,40 +607,105 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
               </button>
             </div>
           </div>
+          <div className="relative mb-4" style={{ position: 'relative' }}>
+            <Search size={16} color="#546e7a" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by title, artist, or album..."
+              aria-label="Search tracks"
+              className="w-full py-2 px-4 rounded-lg outline-none"
+              style={{
+                backgroundColor: '#252525',
+                border: '1px solid #333333',
+                color: '#e0e0e0',
+                paddingLeft: '38px',
+                paddingRight: '34px',
+              }}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear track search"
+                style={{
+                  position: 'absolute',
+                  right: 8,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  color: '#a0a0a0',
+                  cursor: 'pointer',
+                }}
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
           <div className="space-y-2">
+            {/* Page size selector for available tracks */}
+            <div className="flex items-center justify-end gap-2 mb-2">
+              <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>Per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(parseInt(e.target.value, 10) || 25); setPage(1); }}
+                className="mono px-2 py-1 rounded-lg"
+                style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#e0e0e0', fontSize: '0.75rem' }}
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
             {viewMode === 'platform' ? (
-              availableTracks.map((track) => {
-                const isAdded = tracks.some(t => t.id === track.id);
-                return (
-                  <button
-                    key={track.id}
-                    onClick={() => !isAdded && addTrack(track)}
-                    disabled={isAdded}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg text-left transition-all"
-                    style={{
-                      backgroundColor: isAdded ? '#1a1a1a' : '#252525',
-                      border: '1px solid #333333',
-                      opacity: isAdded ? 0.5 : 1,
-                      cursor: isAdded ? 'not-allowed' : 'pointer',
-                    }}
-                  >
-                    <ImageWithFallback
-                      src={track.coverArt}
-                      alt={track.album}
-                      className="w-12 h-12 rounded object-cover"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="truncate" style={{ color: '#e0e0e0' }}>
-                        {track.title}
-                      </p>
-                      <p className="mono truncate" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
-                        {track.artist}
-                      </p>
-                    </div>
-                    {!isAdded && <Plus size={20} color="#546e7a" />}
-                  </button>
-                );
-              })
+              filteredPlatformTracks.length === 0 ? (
+                <div className="p-6 rounded-lg text-center" style={{ backgroundColor: '#252525', border: '1px dashed #333333' }}>
+                  <p style={{ color: '#a0a0a0' }}>
+                    {hasSearch ? 'No tracks match your search.' : 'No platform tracks available right now.'}
+                  </p>
+                </div>
+              ) : (
+                ((() => {
+                  const total = filteredPlatformTracks.length;
+                  const start = (page - 1) * pageSize;
+                  const end = Math.min(start + pageSize, total);
+                  return filteredPlatformTracks.slice(start, end);
+                })()).map((track) => {
+                  const isAdded = tracks.some(t => t.id === track.id);
+                  return (
+                    <button
+                      key={track.id}
+                      onClick={() => !isAdded && addTrack(track)}
+                      disabled={isAdded}
+                      className="w-full flex items-center gap-3 p-3 rounded-lg text-left transition-all"
+                      style={{
+                        backgroundColor: isAdded ? '#1a1a1a' : '#252525',
+                        border: '1px solid #333333',
+                        opacity: isAdded ? 0.5 : 1,
+                        cursor: isAdded ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      <ImageWithFallback
+                        src={track.coverArt}
+                        alt={track.album}
+                        className="w-12 h-12 rounded object-cover"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="truncate" style={{ color: '#e0e0e0' }}>
+                          {track.title || track.name}
+                        </p>
+                        <p className="mono truncate" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
+                          {track.artist}
+                        </p>
+                      </div>
+                      {!isAdded && <Plus size={20} color="#546e7a" />}
+                    </button>
+                  );
+                })
+              )
             ) : (
               isLoadingLocal ? (
                 <div className="p-8 rounded-lg text-center" style={{ backgroundColor: '#252525', border: '1px dashed #333333' }}>
@@ -627,8 +719,17 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
                     Upload tracks from the home screen to add them here
                   </p>
                 </div>
+              ) : filteredLocalTracks.length === 0 ? (
+                <div className="p-8 rounded-lg text-center" style={{ backgroundColor: '#252525', border: '1px dashed #333333' }}>
+                  <p style={{ color: '#a0a0a0' }}>No local tracks match your search.</p>
+                </div>
               ) : (
-                localTracks.map((track) => {
+                ((() => {
+                  const total = filteredLocalTracks.length;
+                  const start = (page - 1) * pageSize;
+                  const end = Math.min(start + pageSize, total);
+                  return filteredLocalTracks.slice(start, end);
+                })()).map((track) => {
                   const isAdded = tracks.some(t => t.id === track.id);
                   return (
                     <button
@@ -662,6 +763,27 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
                 })
               )
             )}
+            {/* Pagination controls */}
+            <div className="flex items-center justify-between mt-3">
+              <div />
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  className="px-3 py-1 rounded-lg"
+                  style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#e0e0e0', fontSize: '0.75rem' }}
+                >
+                  Prev
+                </button>
+                <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>{page}</span>
+                <button
+                  onClick={() => setPage((p) => p + 1)}
+                  className="px-3 py-1 rounded-lg"
+                  style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#e0e0e0', fontSize: '0.75rem' }}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 

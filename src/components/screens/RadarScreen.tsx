@@ -310,11 +310,21 @@ export function RadarScreen({ onUserClick }: RadarScreenProps) {
 
 
   // Add mock x/y coordinates to connections for radar visualization
-  const mockUsers: Connection[] = mockConnections.map((conn, i) => ({
-    ...conn,
-    x: 50 + Math.cos((i / mockConnections.length) * Math.PI * 2) * 30,
-    y: 50 + Math.sin((i / mockConnections.length) * Math.PI * 2) * 30,
-  }));
+  const mockUsers: Connection[] = mockConnections.map((conn, i) => {
+    // Invert the score: Higher score = Smaller radius (closer to center)
+    // We map 100-0 score to 10-45 radius (keeping some buffer from dead center)
+    const normalizedScore = Math.max(0, Math.min(100, conn.matchScore));
+    const radius = 45 - (normalizedScore * 0.35); 
+    
+    // Add some random "scatter" to the angle so they aren't perfectly aligned
+    const angle = (i / mockConnections.length) * Math.PI * 2; 
+
+    return {
+        ...conn,
+        x: 50 + Math.cos(angle) * radius,
+        y: 50 + Math.sin(angle) * radius,
+    };
+  });
 
   // Filter users based on search query
   const filteredUsers = mockUsers.filter(user =>

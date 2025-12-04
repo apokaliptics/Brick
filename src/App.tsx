@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
-import { Home, Zap, User, Plus, List, Search, Disc3, Play, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Home, Zap, Plus, List, Search, Disc3, Play, X, HardDrive, Cloud } from 'lucide-react';
 import { useTheme } from './contexts/ThemeContext';
+import { useWall } from './contexts/WallContext';
 import { HomeScreenV2 } from './components/screens/HomeScreenV2';
 import { RadarScreen } from './components/screens/RadarScreen_temp';
 import { VaultScreen } from './components/screens/VaultScreen';
@@ -12,6 +13,7 @@ import { ImportScreen } from './components/screens/ImportScreen';
 import { ConnectionManagementScreen } from './components/screens/ConnectionManagementScreen';
 import { ArtistProfileScreenV2 } from './components/screens/ArtistProfileScreenV2';
 import { MusicPlayer } from './components/MusicPlayer';
+import { WallOverlay } from './components/WallOverlay';
 import { LocalMusicUploader } from './components/LocalMusicUploader';
 import { PlayerApple } from './components/PlayerApple';
 import { Navigation } from './components/Navigation';
@@ -20,14 +22,19 @@ import { ConnectionSuccessModal } from './components/modals/ConnectionSuccessMod
 import { PatronageLockModal } from './components/modals/PatronageLockModal';
 import { UserSettingsModal } from './components/modals/UserSettingsModal';
 import { ImageWithFallback } from './components/figma/ImageWithFallback';
+import { logoutUser } from './utils/auth';
+import { formatBitrate } from './utils/audioMetaHelpers';
 import { mockPlaylists, mockTracks, mockCurrentUser, mockArtists, mockConnections } from './data/mockData';
-import type { Track, Playlist, Screen } from './types';
+import type { Track, Playlist, Screen, User } from './types';
 import { addRecentlyPlayedPlaylist } from './utils/recentlyPlayedPlaylists';
 import { addRecentlyPlayedTrack } from './utils/recentlyPlayed';
 import './styles/globals.css';
+import pinkStyles from './styles/pinkTier.module.css';
 
 export default function App() {
   const { colors } = useTheme();
+  const { wallState, pinkTierUnlocked } = useWall();
+  const wallShellClass = `app-shell brick-shell wall-state-${wallState.toLowerCase()}`;
 
   // Helper function to format duration
   const formatDuration = (duration: string | number): string => {
@@ -55,10 +62,22 @@ export default function App() {
 
   // Auth states
   const [authState, setAuthState] = useState<'login' | 'import' | 'authenticated'>('login');
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   
-  // Set document title
+  // Set document title and check for existing session
   useEffect(() => {
     document.title = 'Brick';
+    
+    // Check if user is already logged in
+    const loadUser = async () => {
+      const { getCurrentUser } = await import('./utils/auth');
+      const user = getCurrentUser();
+      if (user) {
+        setCurrentUser(user);
+        setAuthState('authenticated');
+      }
+    };
+    loadUser();
   }, []);
   
   // Screen states
@@ -72,6 +91,17 @@ export default function App() {
   const [currentPlayingTrack, setCurrentPlayingTrack] = useState<Track | null>(null);
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [musicPlayerControls, setMusicPlayerControls] = useState<any>(null);
+  const [isPink, setIsPink] = useState(false);
+
+  useEffect(() => {
+    if (!pinkTierUnlocked && isPink) {
+      setIsPink(false);
+    }
+  }, [pinkTierUnlocked, isPink]);
+
+  const notifyWallSessionReset = (reason: string) => {
+    musicPlayerControls?.invalidateWallSession?.(reason);
+  };
   
   // Modal states
   const [showArtistProfile, setShowArtistProfile] = useState(false);
@@ -85,14 +115,24 @@ export default function App() {
   const [showUserSettings, setShowUserSettings] = useState(false);
 
   // UI states
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Auth handlers
-  const handleLogin = () => {
+  const handleLogin = (user: User) => {
+    setCurrentUser(user);
     setAuthState('authenticated');
   };
 
   const handleSignup = () => {
+    // After signup, load the newly created user
+    const loadUser = async () => {
+      const { getCurrentUser } = await import('./utils/auth');
+      const user = getCurrentUser();
+      if (user) {
+        setCurrentUser(user);
+      }
+    };
+    loadUser();
     setAuthState('import');
   };
 
@@ -107,6 +147,7 @@ export default function App() {
 
   // App handlers
   const handlePlaylistClick = async (playlistId: string) => {
+    notifyWallSessionReset('playlist-start');
     // Check if it's a local playlist in IndexedDB
     try {
       const db = await openPlaylistDB();
@@ -132,6 +173,11 @@ export default function App() {
         const playerTracks = await Promise.all(
           localPlaylist.tracks.map(async (track: Track) => {
             let audioUrl = track.audioUrl;
+            let fileRef = track.file;
+            let bitDepth = track.bitDepth;
+            let sampleRate = track.sampleRate;
+            let bitrateKbps = track.bitrateKbps;
+            let codecLabel = track.codecLabel;
             
             // If no audioUrl or it's a local track ID, try to load from IndexedDB
             if (!audioUrl || !audioUrl.startsWith('http')) {
@@ -145,6 +191,11 @@ export default function App() {
                 if (localTrack && localTrack.file) {
                   // Create blob URL from the stored file
                   audioUrl = URL.createObjectURL(localTrack.file);
+                  fileRef = localTrack.file;
+                  bitDepth = bitDepth ?? localTrack.bitDepth;
+                  sampleRate = sampleRate ?? localTrack.sampleRate;
+                  bitrateKbps = bitrateKbps ?? localTrack.bitrateKbps;
+                  codecLabel = codecLabel ?? localTrack.codecLabel;
                   console.log('Recreated blob URL for track:', track.title);
                 }
               } catch (error) {
@@ -163,7 +214,12 @@ export default function App() {
               audioUrl: audioUrl || 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
               quality: track.quality,
               duration: track.duration,
-            };
+              bitDepth,
+              sampleRate,
+              bitrateKbps,
+              codecLabel,
+              file: fileRef,
+            } as Track;
           })
         );
         
@@ -196,6 +252,11 @@ export default function App() {
           quality: firstPlayerTrack.quality,
           duration: '0:00', // Will be updated by player
           isPatronage: false,
+          bitDepth: firstPlayerTrack.bitDepth,
+          sampleRate: firstPlayerTrack.sampleRate,
+          bitrateKbps: firstPlayerTrack.bitrateKbps,
+          codecLabel: firstPlayerTrack.codecLabel,
+          file: firstPlayerTrack.file,
         };
         
         setCurrentTrack(trackFormat);
@@ -236,6 +297,11 @@ export default function App() {
       coverImage: track.coverArt,
       audioUrl: track.audioUrl || 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
       quality: track.quality,
+      bitDepth: track.bitDepth,
+      sampleRate: track.sampleRate,
+      bitrateKbps: track.bitrateKbps,
+      codecLabel: track.codecLabel,
+      file: track.file,
     }));
     
     setPlaylist(playerTracks);
@@ -248,6 +314,7 @@ export default function App() {
   };
 
   const handleLocalTrackPlay = (localTrack: any) => {
+    notifyWallSessionReset('local-track');
     console.log('Playing local track:', localTrack);
 
     // Track recently played track
@@ -272,6 +339,11 @@ export default function App() {
       audioUrl: localTrack.url,
       quality: localTrack.format,
       duration: localTrack.duration,
+      bitDepth: localTrack.bitDepth,
+      sampleRate: localTrack.sampleRate,
+      bitrateKbps: localTrack.bitrateKbps,
+      codecLabel: localTrack.codecLabel,
+      file: localTrack.file,
     };
 
     // Convert to Track format for PlayerV3
@@ -286,6 +358,11 @@ export default function App() {
       quality: localTrack.format,
       duration: formatDuration(localTrack.duration),
       isPatronage: false,
+      bitDepth: localTrack.bitDepth,
+      sampleRate: localTrack.sampleRate,
+      bitrateKbps: localTrack.bitrateKbps,
+      codecLabel: localTrack.codecLabel,
+      file: localTrack.file,
     };
 
     // Set as single-track playlist
@@ -297,6 +374,7 @@ export default function App() {
   };
 
   const handleLocalAlbumPlay = (localTracks: any[]) => {
+    notifyWallSessionReset('local-album');
     console.log('Playing local album with', localTracks.length, 'tracks');
     
     // Convert local tracks to player format
@@ -311,6 +389,11 @@ export default function App() {
       audioUrl: track.url,
       quality: track.format,
       duration: track.duration,
+      bitDepth: track.bitDepth,
+      sampleRate: track.sampleRate,
+      bitrateKbps: track.bitrateKbps,
+      codecLabel: track.codecLabel,
+      file: track.file,
     }));
 
     // Convert first track to Track format for PlayerApple
@@ -326,6 +409,11 @@ export default function App() {
       quality: firstTrack.format,
       duration: firstTrack.duration.toString(),
       isPatronage: false,
+      bitDepth: firstTrack.bitDepth,
+      sampleRate: firstTrack.sampleRate,
+      bitrateKbps: firstTrack.bitrateKbps,
+      codecLabel: firstTrack.codecLabel,
+      file: firstTrack.file,
     };
 
     // Set album playlist with gapless playback enabled
@@ -351,6 +439,11 @@ export default function App() {
       quality: track.quality || 'MP3',
       duration: track.duration || '3:45',
       isPatronage: track.isPatronage || false,
+      bitDepth: track.bitDepth,
+      sampleRate: track.sampleRate,
+      bitrateKbps: track.bitrateKbps,
+      codecLabel: track.codecLabel,
+      file: track.file,
     };
     
     setCurrentTrack(updatedTrack);
@@ -396,7 +489,7 @@ export default function App() {
       coverImage: customCover || tracks[0]?.coverArt || 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=300',
       customCoverImage: customCover || undefined,
       trackCount: tracks.length,
-      creator: mockCurrentUser.id,
+      creator: currentUser?.id || 'user-1',
       likes: 0,
       isLocked: false,
       structuralIntegrity: Math.round(calculateStructuralIntegrity(tracks)),
@@ -582,9 +675,29 @@ export default function App() {
   const selectedArtist = mockArtists.find(a => a.id === selectedArtistId);
   const selectedConnection = mockConnections.find(c => c.user.id === selectedUserId);
 
+  const operatorName = currentUser?.name || 'Guest';
+  const baseTierLabel = (currentUser?.tier || 'Foundation').toUpperCase();
+  const tierLabel = isPink ? 'PINK ARCHITECT' : baseTierLabel;
+  const pageLabelMap: Record<Screen, string> = {
+    home: 'HOME GRID',
+    radar: 'RADAR SCAN',
+    profile: 'PERSONAL WALL',
+    vault: 'VAULT',
+    feed: 'NEIGHBORHOOD',
+  };
+  const currentPageLabel = pageLabelMap[activeTab];
+  const navTab: Exclude<Screen, 'feed'> = activeTab === 'feed' ? 'home' : activeTab;
+  const topBarItems = [
+    { label: 'OPERATOR', value: operatorName },
+    { label: 'TIER', value: tierLabel, isPink: isPink },
+    { label: 'CURRENT PAGE', value: currentPageLabel },
+    { label: 'SYSTEM', value: 'NO ALERT' },
+  ];
+
   // Handle track click from radar screen
   const handleTrackClick = (track: Track, playlist: Track[]) => {
     console.log('Playing track from radar:', track.title);
+    notifyWallSessionReset('radar-play');
     setPlaylist(playlist);
     setCurrentPlayingTrack(track);
     setCurrentTrack(track);
@@ -604,9 +717,42 @@ export default function App() {
 
   // Main app
   return (
-    <div className="min-h-screen flex" style={{ backgroundColor: colors.bg.primary }}>
-      {/* Main Content - Responsive to sidebar */}
-      <div className={`flex-1 pb-20 md:pb-6 overflow-x-hidden ${sidebarCollapsed ? 'md:mr-8' : currentPlayingTrack ? 'md:mr-[272px]' : 'mr-0'}`}>
+    <div className={wallShellClass} style={{ backgroundColor: colors.bg.primary }}>
+      <WallOverlay enabled={isPink} />
+      {/* Main Content - Centered between fixed sidebars */}
+      <div className="flex-1 overflow-x-hidden pb-32 app-main-rails">
+        {/* Unified center column for all screens */}
+        <div className="mx-auto responsive-main-shell">
+          {/* Ultra-thin command bar */}
+          <div className="sticky top-0 z-20 mb-4 px-3">
+            <div
+              className="flex flex-wrap items-center justify-center rounded-[4px] border px-5 py-2 command-bar"
+              style={{
+                background: 'linear-gradient(135deg, rgba(18,18,18,0.92), rgba(28,18,18,0.85))',
+                borderColor: 'rgba(211,47,47,0.25)',
+                backdropFilter: 'blur(18px)',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.45), 0 0 30px rgba(161,24,24,0.35)'
+              }}
+            >
+              {topBarItems.map((item, idx) => (
+                <div key={`${item.label}-${idx}`} className="flex items-center uppercase command-bar-item">
+                  <span className="mono command-bar-label">
+                    {item.label}:
+                  </span>
+                  <span
+                    className={`mono command-bar-value ${item.isPink ? pinkStyles.pinkBadgeText : ''}`}
+                  >
+                    {item.value}
+                  </span>
+                  {idx < topBarItems.length - 1 && (
+                    <span className="mono" style={{ color: '#444444', letterSpacing: '0' }}>
+                      •
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
         {activeTab === 'home' && (
           <>
             <HomeScreenV2
@@ -620,17 +766,7 @@ export default function App() {
               onLocalAlbumPlay={handleLocalAlbumPlay}
             />
             
-            {/* Floating Action Button - Create Blueprint */}
-            <button
-              onClick={() => setShowPlaylistCreation(true)}
-              className="fixed bottom-24 md:bottom-8 right-6 w-14 h-14 rounded-full flex items-center justify-center shadow-lg z-40 transition-all duration-200 hover:scale-110 active:scale-95"
-              style={{
-                background: 'linear-gradient(to bottom, #d32f2f, #b71c1c)',
-                boxShadow: '0 4px 20px rgba(211, 47, 47, 0.4)',
-              }}
-            >
-              <Plus size={24} color="#e0e0e0" strokeWidth={3} />
-            </button>
+            {/* Playlist creation moved into player */}
           </>
         )}
         
@@ -640,83 +776,172 @@ export default function App() {
         
         {activeTab === 'profile' && (
           <>
-            <ProfileScreen onPlaylistClick={handlePlaylistClick} />
+            <ProfileScreen
+              onPlaylistClick={handlePlaylistClick}
+              onCreatePlaylist={() => setShowPlaylistCreation(true)}
+              currentUser={currentUser}
+              isPinkMode={isPink}
+              onPinkToggle={(value) => setIsPink(value)}
+              pinkTierUnlocked={pinkTierUnlocked}
+            />
             
-            {/* Floating Action Button - Create Playlist */}
-            <button
-              onClick={() => setShowPlaylistCreation(true)}
-              className="fixed bottom-24 right-6 w-14 h-14 rounded-full flex items-center justify-center shadow-lg z-40 transition-all duration-200 hover:scale-110 active:scale-95"
-              style={{
-                background: 'linear-gradient(to bottom, #d32f2f, #b71c1c)',
-                boxShadow: '0 4px 20px rgba(211, 47, 47, 0.4)',
-              }}
-            >
-              <Plus size={24} color="#e0e0e0" strokeWidth={3} />
-            </button>
+            {/* Playlist creation moved into player */}
           </>
         )}
         
-        {activeTab === 'vault' && <VaultScreen onOpenConnectionManagement={() => setShowConnectionManagement(true)} />}
+        {activeTab === 'vault' && (
+          <VaultScreen
+            onOpenConnectionManagement={() => setShowConnectionManagement(true)}
+            onSignOut={() => {
+              try {
+                logoutUser();
+              } catch {}
+              setCurrentUser(null);
+              setAuthState('login');
+              setActiveTab('home' as Screen);
+            }}
+          />
+        )}
         
         {/* Feed Button - Removed, now in pill navigation */}
+        </div>
       </div>
 
-      {/* Right Sidebar - Currently Playing (Compact) */}
-      {currentPlayingTrack && (
-        <>
-          {/* Collapsed Button - Positioned outside sidebar */}
-          {sidebarCollapsed && (
-            <button
-              onClick={() => setSidebarCollapsed(false)}
-              className="fixed top-1/2 -translate-y-1/2 right-4 w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-110 z-30"
-              style={{
-                backgroundColor: '#d32f2f',
-                border: 'none',
-                boxShadow: '0 2px 8px rgba(211, 47, 47, 0.3)',
-              }}
-              title="Expand sidebar"
-            >
-              <Play size={14} color="#ffffff" strokeWidth={3} />
-            </button>
-          )}
-
-          {/* Expanded Sidebar */}
-          {!sidebarCollapsed && (
-            <>
-              <div
-                className="hidden md:flex md:flex-col border-l overflow-hidden fixed right-0 top-0 bottom-0 z-30 w-[272px] max-w-[272px] transition-all duration-300"
-                style={{
-                  backgroundColor: 'rgba(30, 30, 30, 0.8)',
-                  backdropFilter: 'blur(40px)',
-                  borderColor: 'rgba(255, 255, 255, 0.05)',
-                  boxShadow: '-4px 0 20px rgba(0, 0, 0, 0.3)',
-                }}
-              >
+      {/* Right Sidebar - Currently Playing (Fixed) */}
+      {(currentPlayingTrack || !currentPlayingTrack) && (
+        <div
+            className="hidden md:flex md:flex-col border-l overflow-hidden fixed right-0 top-0 bottom-0 z-30 now-playing-rail"
+            style={{
+              backgroundColor: 'rgba(30, 30, 30, 0.8)',
+              backdropFilter: 'blur(40px)',
+              borderColor: 'rgba(255, 255, 255, 0.05)',
+              boxShadow: '-4px 0 20px rgba(0, 0, 0, 0.3)',
+            }}
+          >
                 {/* Sidebar Content - Scrollable */}
-                <div className="flex-1 overflow-y-auto p-3 flex flex-col items-center">
+                {/* Derive live audio metadata from the Track used by players */}
+                {/* Use `currentTrack` which is a `Track` type feeding players; fallback if needed */}
+                
+                {/* Hooks must be called unconditionally and at the top level */}
+                {/** Build a stable track reference for the metadata hook */}
+                
+                
+                <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 flex flex-col items-center" style={{ width: '100%', maxWidth: 'min(320px, 100%)', minWidth: 0 }}>
                   <p className="mono mb-3 px-2 text-center" style={{ color: '#666666', fontSize: '0.65rem', letterSpacing: '0.05em' }}>NOW PLAYING</p>
 
-                  {/* Cover Art */}
-                  <div
-                    className="mb-4 rounded-lg overflow-hidden mx-auto cursor-pointer transition-all duration-200 hover:scale-105"
-                    style={{ width: '180px', height: '180px', boxShadow: '0 4px 16px rgba(211, 47, 47, 0.15)' }}
-                    onClick={() => setShowPlayer(true)}
-                  >
-                    <ImageWithFallback
-                      src={currentPlayingTrack.coverImage || 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=300'}
-                      alt={currentPlayingTrack.name}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-
-                  {/* Track Info - Compact Style */}
-                  <div className="mb-4 text-center max-w-full px-2">
-                    <p
-                      style={{ color: '#e0e0e0' }}
-                      className="text-sm font-bold mb-2 truncate cursor-pointer hover:text-[#d32f2f] transition-colors"
+                  {/* Cover Art or Empty State */}
+                  {currentPlayingTrack ? (
+                    <div
+                      className="mb-4 rounded-lg overflow-hidden mx-auto cursor-pointer transition-all duration-200 hover:scale-105"
+                      style={{ width: '180px', height: '180px', maxWidth: '180px', minWidth: '180px', boxShadow: '0 4px 16px rgba(211, 47, 47, 0.15)' }}
                       onClick={() => setShowPlayer(true)}
                     >
+                      <ImageWithFallback
+                        src={currentPlayingTrack.coverImage || 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=300'}
+                        alt={currentPlayingTrack.name}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  ) : (
+                    <div className="mb-4 rounded-lg mx-auto flex items-center justify-center" style={{ width: '180px', height: '180px', border: '1px dashed rgba(255,255,255,0.1)', backgroundColor: 'rgba(26,26,26,0.6)' }}>
+                      <span className="mono" style={{ color: '#888888', fontSize: '0.8rem' }}>No track playing</span>
+                    </div>
+                  )}
+
+                  {/* Track Info - Compact Style (FIXED for overflow) */}
+                  {currentPlayingTrack && (
+                  <div className="mb-4 text-center px-4 overflow-hidden" style={{ width: '100%', maxWidth: 'min(320px, 100%)' }}>
+                    {/* Audio quality chips under cover */}
+                    {/* Do not use hooks here; read from currentTrack/currentPlayingTrack props */}
+                    <div className="flex items-center justify-center gap-2 mb-3">
+                      {(() => {
+                        const codec = currentTrack?.codecLabel ?? currentPlayingTrack?.codecLabel ?? (currentTrack?.quality === 'FLAC' ? 'FLAC' : undefined);
+                        return codec ? (
+                        <span
+                          className="mono px-2 py-0.5 rounded"
+                          style={{
+                            border: '1px solid #333333',
+                            background: 'rgba(26,26,26,0.6)',
+                            color: '#e0e0e0',
+                            fontSize: '0.7rem',
+                            minWidth: '72px'
+                          }}
+                        >
+                          {String(codec).toUpperCase()}
+                        </span>
+                        ) : null;
+                      })()}
+                      {(() => {
+                        // Source badge: Local vs Cloud
+                        const isLocal = !!(currentTrack?.file || currentPlayingTrack?.file) || !!(currentTrack?.audioUrl && !String(currentTrack.audioUrl).startsWith('http')) || !!(currentPlayingTrack?.audioUrl && !String(currentPlayingTrack.audioUrl).startsWith('http'));
+                        const label = isLocal ? 'Local' : 'Cloud';
+                        return (
+                          <span
+                            className="mono px-2 py-0.5 rounded flex items-center gap-1"
+                            style={{
+                              border: '1px solid #333333',
+                              background: 'rgba(26,26,26,0.6)',
+                              color: '#e0e0e0',
+                              fontSize: '0.7rem'
+                            }}
+                          >
+                            {isLocal ? <HardDrive size={12} color="#e0e0e0" /> : <Cloud size={12} color="#e0e0e0" />}
+                            {label}
+                          </span>
+                        );
+                      })()}
+                      {(() => {
+                        const bitDepth = currentTrack?.bitDepth ?? currentPlayingTrack?.bitDepth;
+                        const sampleRate = currentTrack?.sampleRate ?? currentPlayingTrack?.sampleRate;
+                        return (bitDepth || sampleRate) ? (
+                        <span
+                          className="mono px-2 py-0.5 rounded"
+                          style={{
+                            border: '1px solid #333333',
+                            background: 'rgba(26,26,26,0.6)',
+                            color: '#e0e0e0',
+                            fontSize: '0.7rem'
+                          }}
+                        >
+                          {bitDepth ? `${bitDepth}-bit` : ''}
+                          {bitDepth && sampleRate ? ' / ' : ''}
+                          {sampleRate ? `${sampleRate}kHz` : ''}
+                        </span>
+                        ) : null;
+                      })()}
+                      {(() => {
+                        const bitrate = currentTrack?.bitrateKbps ?? currentPlayingTrack?.bitrateKbps;
+                        return bitrate ? (
+                        <span
+                          className="mono px-2 py-0.5 rounded"
+                          style={{
+                            border: '1px solid #333333',
+                            background: 'rgba(26,26,26,0.6)',
+                            color: '#e0e0e0',
+                            fontSize: '0.7rem'
+                          }}
+                        >
+                          {formatBitrate(bitrate)}
+                        </span>
+                        ) : null;
+                      })()}
+                    </div>
+                    <p
+                      style={{ color: '#e0e0e0' }}
+                      className="text-sm font-bold mb-2 truncate w-full min-w-0 cursor-pointer hover:text-[#d32f2f] transition-colors"
+                      onClick={() => setShowPlayer(true)}
+                      title={currentPlayingTrack.name}
+                    >
                       {currentPlayingTrack.name}
+                    </p>
+                    
+                    {/* Added Artist Name for better context */}
+                    <p 
+                      style={{ color: '#888888' }} 
+                      className="text-xs truncate w-full min-w-0 mb-3"
+                      title={currentPlayingTrack.artist}
+                    >
+                      {currentPlayingTrack.artist}
                     </p>
 
                     {/* Progress Bar */}
@@ -740,25 +965,55 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+                  )}
 
-                  {/* Queue Info */}
+                  {/* Queue Info - Industrial Luxury Design */}
                   {playlist.length > 1 && (
-                    <div className="w-full">
-                      <p className="mono mb-4 px-4 text-center" style={{ color: '#666666', fontSize: '0.65rem', letterSpacing: '0.05em' }}>UP NEXT</p>
-                      <div className="px-4">
+                    <div className="mt-4 overflow-hidden" style={{ width: '100%', maxWidth: 'min(320px, 100%)' }}>
+                      {/* Header with divider line */}
+                      <div className="px-4 mb-4 flex items-center gap-3">
+                        <div style={{ flex: 1, height: '1px', background: 'linear-gradient(to right, transparent, rgba(211, 47, 47, 0.3), transparent)' }} />
+                        <p className="mono" style={{ 
+                          color: '#d32f2f', 
+                          fontSize: '0.6rem', 
+                          letterSpacing: '0.15em', 
+                          fontWeight: 700,
+                          textTransform: 'uppercase',
+                          textShadow: '0 0 10px rgba(211, 47, 47, 0.3)'
+                        }}>
+                          Up Next
+                        </p>
+                        <div style={{ flex: 1, height: '1px', background: 'linear-gradient(to right, rgba(211, 47, 47, 0.3), transparent)' }} />
+                      </div>
+                      
+                      <div className="px-3 flex flex-col gap-0 overflow-hidden" style={{ width: '100%', maxWidth: 'min(320px, 100%)' }}>
                         {(() => {
                           const currentIndex = playlist.findIndex(t => t.id === currentPlayingTrack?.id);
                           const upcomingTracks = playlist.slice(currentIndex + 1, currentIndex + 4);
+                          
                           return upcomingTracks.map((track, idx) => (
-                            <div key={`${track.id}-${idx}`}>
+                            <div key={`${track.id}-${idx}`} className="w-full min-w-0 overflow-hidden">
                               <div
-                                className="py-3 hover:bg-[#252525] transition-all duration-200 cursor-pointer group"
+                                className="py-2.5 px-2 transition-all duration-300 cursor-pointer group w-full min-w-0 rounded"
+                                style={{
+                                  backgroundColor: 'transparent',
+                                  border: '1px solid transparent',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'rgba(211, 47, 47, 0.05)';
+                                  e.currentTarget.style.borderColor = 'rgba(211, 47, 47, 0.2)';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'transparent';
+                                  e.currentTarget.style.borderColor = 'transparent';
+                                }}
                                 onClick={() => {
-                                  // Skip to this track
                                   const targetIndex = playlist.findIndex(t => t.id === track.id);
                                   if (targetIndex !== -1) {
                                     const trackToPlay = playlist[targetIndex];
+                                    notifyWallSessionReset('queue-jump');
                                     setCurrentPlayingTrack(trackToPlay);
+                                    // Update legacy state
                                     setCurrentTrack({
                                       id: trackToPlay.id,
                                       title: trackToPlay.title || trackToPlay.name || 'Untitled',
@@ -774,30 +1029,95 @@ export default function App() {
                                   }
                                 }}
                               >
-                                <div className="flex items-center gap-3">
-                                  <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium mono" style={{ backgroundColor: 'rgba(211, 47, 47, 0.1)', color: '#d32f2f' }}>
-                                    {currentIndex + idx + 2}
+                                <div className="flex items-center gap-3 w-full min-w-0 max-w-full overflow-hidden">
+                                  {/* Track Number - Industrial Style */}
+                                  <div 
+                                    className="flex-shrink-0 w-7 h-7 flex items-center justify-center mono" 
+                                    style={{ 
+                                      backgroundColor: 'rgba(211, 47, 47, 0.08)',
+                                      border: '1px solid rgba(211, 47, 47, 0.2)',
+                                      color: '#d32f2f',
+                                      fontSize: '0.7rem',
+                                      fontWeight: 700,
+                                      letterSpacing: '0.05em',
+                                      clipPath: 'polygon(10% 0%, 100% 0%, 90% 100%, 0% 100%)',
+                                      textShadow: '0 0 8px rgba(211, 47, 47, 0.2)'
+                                    }}
+                                  >
+                                    {String(currentIndex + idx + 2).padStart(2, '0')}
                                   </div>
-                                  <div className="flex-1 min-w-0 max-w-0">
-                                    <p style={{ color: '#e0e0e0' }} className="text-sm font-medium truncate group-hover:text-[#d32f2f] transition-colors">{track.name}</p>
-                                    <p style={{ color: '#888888' }} className="text-xs truncate">{track.artist}</p>
+                                  
+                                  {/* Track Text - Refined Typography */}
+                                  <div className="flex-1 min-w-0 overflow-hidden">
+                                    <p 
+                                      style={{ 
+                                        color: '#e8e8e8',
+                                        fontSize: '0.825rem',
+                                        fontWeight: 600,
+                                        letterSpacing: '0.02em',
+                                        lineHeight: '1.2',
+                                        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+                                      }} 
+                                      className="truncate w-full min-w-0 group-hover:text-[#d32f2f] transition-colors"
+                                      title={track.name}
+                                    >
+                                      {track.name}
+                                    </p>
+                                    <p 
+                                      style={{ 
+                                        color: '#7a7a7a',
+                                        fontSize: '0.7rem',
+                                        fontWeight: 500,
+                                        letterSpacing: '0.03em',
+                                        lineHeight: '1.3',
+                                        marginTop: '2px',
+                                        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+                                      }} 
+                                      className="truncate w-full min-w-0"
+                                      title={track.artist}
+                                    >
+                                      {track.artist}
+                                    </p>
+                                  </div>
+
+                                  {/* Subtle play indicator on hover */}
+                                  <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#d32f2f" strokeWidth="2">
+                                      <polygon points="5 3 19 12 5 21 5 3" fill="#d32f2f" />
+                                    </svg>
                                   </div>
                                 </div>
                               </div>
+                              
+                              {/* Separator - Refined */}
                               {idx < upcomingTracks.length - 1 && (
-                                <div className="mx-11 my-2" style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)' }} />
+                                <div className="mx-10 my-1.5" style={{ 
+                                  height: '1px',
+                                  background: 'linear-gradient(to right, transparent, rgba(255, 255, 255, 0.06), transparent)' 
+                                }} />
                               )}
                             </div>
                           ));
                         })()}
+
+                        {/* "+ More" Indicator - Refined */}
                         {(() => {
                           const currentIndex = playlist.findIndex(t => t.id === currentPlayingTrack?.id);
                           const remainingTracks = playlist.length - currentIndex - 4;
-                          return remainingTracks > 1 && (
-                            <div className="py-2">
-                              <p className="text-xs italic text-center mono" style={{ color: '#666666', fontSize: '0.7rem', letterSpacing: '0.05em' }}>
-                                +{remainingTracks} more
-                              </p>
+                          return remainingTracks > 0 && (
+                            <div className="py-3 w-full mt-2">
+                              <div className="flex items-center justify-center gap-2">
+                                <div style={{ width: '20px', height: '1px', backgroundColor: 'rgba(211, 47, 47, 0.2)' }} />
+                                <p className="mono" style={{ 
+                                  color: '#666666', 
+                                  fontSize: '0.65rem', 
+                                  letterSpacing: '0.08em',
+                                  fontWeight: 600
+                                }}>
+                                  +{remainingTracks} more
+                                </p>
+                                <div style={{ width: '20px', height: '1px', backgroundColor: 'rgba(211, 47, 47, 0.2)' }} />
+                              </div>
                             </div>
                           );
                         })()}
@@ -805,28 +1125,11 @@ export default function App() {
                     </div>
                   )}
                 </div>
-              </div>
 
-              {/* External Collapse Button */}
-              <button
-                onClick={() => setSidebarCollapsed(true)}
-                className="fixed top-4 right-4 w-8 h-8 rounded-full flex items-center justify-center transition-colors hover:bg-[#2a2a2a] z-40"
-                style={{
-                  backgroundColor: 'rgba(37, 37, 37, 0.8)',
-                  backdropFilter: 'blur(10px)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                }}
-                title="Collapse sidebar"
-              >
-                <X size={16} color="#a0a0a0" />
-              </button>
-            </>
-          )}
-        </>
+            </div>
       )}
-
       {/* Feed Screen (Full screen overlay) */}
-      {activeTab === 'feed' && (
+      {(activeTab as string) === 'feed' && (
         <div className="fixed inset-0 z-50 bg-[#1a1a1a] overflow-y-auto">
           <div className="max-w-2xl mx-auto">
             <div
@@ -851,18 +1154,19 @@ export default function App() {
                 </span>
               </button>
             </div>
-            <FeedScreen />
+            <FeedScreen currentUser={currentUser} />
           </div>
         </div>
       )}
 
       {/* Navigation */}
       <Navigation
-        activeTab={activeTab === 'feed' ? 'home' : activeTab}
+        activeTab={navTab}
         onTabChange={(tab) => setActiveTab(tab)}
         activeFilter={activeTab === 'home' ? homeFilter : undefined}
         onFilterChange={activeTab === 'home' ? handleFilterChange : undefined}
         onSettingsClick={() => setShowUserSettings(true)}
+        isPinkMode={isPink}
       />
 
       {/* Player Overlay */}
@@ -877,6 +1181,18 @@ export default function App() {
           currentTime={musicPlayerControls.currentTime}
           duration={musicPlayerControls.duration}
           formatTime={musicPlayerControls.formatTime}
+          volumeLevel={musicPlayerControls.volume}
+          onVolumeChange={musicPlayerControls.setVolume}
+          eqBands={musicPlayerControls.eqBands ? {
+            low: musicPlayerControls.eqBands.bass,
+            mid: musicPlayerControls.eqBands.mid,
+            high: musicPlayerControls.eqBands.treble,
+          } : undefined}
+          onEqChange={musicPlayerControls.setEqBands ? (bands) => musicPlayerControls.setEqBands({
+            bass: bands.low,
+            mid: bands.mid,
+            treble: bands.high,
+          }) : undefined}
           onClose={() => setShowPlayer(false)}
           isPatronageUnlock={false}
           onArtistClick={handleArtistClickFromPlayer}
@@ -952,22 +1268,39 @@ export default function App() {
       <UserSettingsModal
         isOpen={showUserSettings}
         onClose={() => setShowUserSettings(false)}
-        userName={mockCurrentUser.name}
-        userAvatar={mockCurrentUser.avatar}
+        userName={currentUser?.name || 'Guest'}
+        userAvatar={currentUser?.avatar || ''}
       />
 
-      {/* Music Player */}
-      {currentPlayingTrack && (
-        <MusicPlayer
-          currentTrack={currentPlayingTrack}
-          playlist={playlist}
-          onTrackChange={handleTrackChange}
-          isVisible={!showPlayer}
-          onControlsReady={setMusicPlayerControls}
-          sidebarCollapsed={sidebarCollapsed}
-          externalIsPlaying={isPlaying}
-        />
-      )}
+      {/* Music Player - always fixed (shows empty state without a track) */}
+      <MusicPlayer
+        currentTrack={currentPlayingTrack}
+        playlist={playlist}
+        onTrackChange={handleTrackChange}
+        isVisible={true}
+        onControlsReady={setMusicPlayerControls}
+        sidebarCollapsed={sidebarCollapsed}
+        externalIsPlaying={isPlaying}
+        onCreatePlaylist={() => setShowPlaylistCreation(true)}
+        onExpandPlayer={() => {
+          // Ensure PlayerApple has a track to render
+          if (!currentTrack && currentPlayingTrack) {
+            setCurrentTrack({
+              id: currentPlayingTrack.id,
+              title: currentPlayingTrack.title || currentPlayingTrack.name || 'Untitled',
+              name: currentPlayingTrack.name || currentPlayingTrack.title,
+              artist: currentPlayingTrack.artist,
+              album: currentPlayingTrack.album || 'Unknown Album',
+              coverArt: currentPlayingTrack.coverArt || currentPlayingTrack.coverImage,
+              audioUrl: currentPlayingTrack.audioUrl,
+              quality: currentPlayingTrack.quality || 'MP3',
+              duration: '0:00',
+              isPatronage: false,
+            });
+          }
+          setShowPlayer(true);
+        }}
+      />
     </div>
   );
 }

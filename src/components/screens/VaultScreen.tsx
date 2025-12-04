@@ -3,9 +3,10 @@ import { mockCurrentUser } from '../../data/mockData';
 
 interface VaultScreenProps {
   onOpenConnectionManagement?: () => void;
+  onSignOut?: () => void;
 }
 
-export function VaultScreen({ onOpenConnectionManagement }: VaultScreenProps) {
+export function VaultScreen({ onOpenConnectionManagement, onSignOut }: VaultScreenProps) {
   const currentTier = 'Mason';
 
   const tiers = [
@@ -282,6 +283,7 @@ export function VaultScreen({ onOpenConnectionManagement }: VaultScreenProps) {
               backgroundColor: '#252525',
               border: '1px solid #333333',
             }}
+            onClick={onSignOut}
           >
             <p style={{ color: '#d32f2f' }}>Sign Out</p>
           </button>

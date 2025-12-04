@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Repeat, Shuffle, ChevronDown, ChevronUp } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+import { formatBitrate } from '../utils/audioMetaHelpers';
 import { addRecentlyPlayedTrack } from '../utils/recentlyPlayed';
+import { GaplessAudioEngine } from '../utils/gaplessAudio';
 import type { Track } from '../types';
+import { useTrackAudioMeta } from '../hooks/useTrackAudioMeta';
+import { useTheWallTracker } from '../hooks/useTheWallTracker';
 
 interface MusicPlayerProps {
   currentTrack: Track | null;
@@ -13,228 +18,463 @@ interface MusicPlayerProps {
   onControlsReady?: (controls: any) => void;
   sidebarCollapsed?: boolean;
   externalIsPlaying?: boolean;
+  onExpandPlayer?: () => void;
+  onCreatePlaylist?: () => void;
 }
 
-export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause, isVisible = true, onControlsReady, sidebarCollapsed = false, externalIsPlaying }: MusicPlayerProps) {
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const nextAudioRef = useRef<HTMLAudioElement>(null);
+export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause, isVisible = true, onControlsReady, sidebarCollapsed = false, externalIsPlaying, onExpandPlayer, onCreatePlaylist }: MusicPlayerProps) {
+  const audioMeta = useTrackAudioMeta(currentTrack ?? null);
+  const gaplessEngineRef = useRef<GaplessAudioEngine | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isRepeat, setIsRepeat] = useState(false);
+  const [isRepeatOne, setIsRepeatOne] = useState(false);
   const [isShuffle, setIsShuffle] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const playPromiseRef = useRef<Promise<void> | null>(null);
+  const [showEQ, setShowEQ] = useState(false);
+  const [showAdvancedEQ, setShowAdvancedEQ] = useState(false);
+  const [eqBands, setEqBands] = useState({
+    bass: 0,
+    mid: 0,
+    treble: 0
+  });
+  const [advancedEQ, setAdvancedEQ] = useState({
+    bassFreq: 200,
+    midFreq: 1000,
+    midQ: 1,
+    trebleFreq: 3200,
+  });
+  // Shared style for EQ gain value pills
+  const eqValueStyle: CSSProperties = {
+    display: 'inline-block',
+    color: '#a0a0a0',
+    fontSize: '0.55rem',
+    padding: '1px 2px',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    border: '1px solid #2d2d2d',
+    borderRadius: '4px',
+    lineHeight: '1',
+    whiteSpace: 'nowrap',
+  };
+  const playlistRef = useRef<Track[]>(playlist);
+  const onTrackChangeRef = useRef<typeof onTrackChange>(onTrackChange);
+  const onPlayPauseRef = useRef<typeof onPlayPause>(onPlayPause);
+  const repeatStateRef = useRef({ repeatAll: false, repeatOne: false });
+  const shuffleRef = useRef(false);
+  const engineDrivenTrackRef = useRef<string | null>(null);
+  const loadRequestIdRef = useRef(0);
+  const desiredPlayStateRef = useRef(externalIsPlaying ?? true);
+  const isLoadingTrackRef = useRef(false);
+  const lastSkipAtRef = useRef(0);
+  const pendingSkipRef = useRef<null | 'next' | 'prev'>(null);
+  const handleNextRef = useRef<(reason?: 'auto' | 'manual') => void>(() => {});
+  const currentTrackRef = useRef<Track | null>(currentTrack);
 
-  // Preload next track for gapless playback
+  const wallTracker = useTheWallTracker({
+    currentTrack,
+    currentTime,
+    isPlaying,
+  });
+
+  const wallCompletionRef = useRef(wallTracker.registerNaturalCompletion);
+  const wallInvalidateRef = useRef(wallTracker.invalidateSession);
+
   useEffect(() => {
-    if (!playlist || playlist.length === 0 || !currentTrack) return;
+    wallCompletionRef.current = wallTracker.registerNaturalCompletion;
+  }, [wallTracker.registerNaturalCompletion]);
 
-    const currentIndex = playlist.findIndex(t => t.id === currentTrack.id);
-    const nextIndex = (currentIndex + 1) % playlist.length;
-    const nextTrack = playlist[nextIndex];
+  useEffect(() => {
+    wallInvalidateRef.current = wallTracker.invalidateSession;
+  }, [wallTracker.invalidateSession]);
 
-    if (nextAudioRef.current && nextTrack && nextTrack.audioUrl) {
-      // Preload next track
-      nextAudioRef.current.src = nextTrack.audioUrl;
-      nextAudioRef.current.preload = 'auto';
-      nextAudioRef.current.load();
+  useEffect(() => {
+    playlistRef.current = playlist;
+  }, [playlist]);
+
+  useEffect(() => {
+    onTrackChangeRef.current = onTrackChange;
+  }, [onTrackChange]);
+
+  useEffect(() => {
+    onPlayPauseRef.current = onPlayPause;
+  }, [onPlayPause]);
+
+  useEffect(() => {
+    repeatStateRef.current = { repeatAll: isRepeat, repeatOne: isRepeatOne };
+  }, [isRepeat, isRepeatOne]);
+
+  useEffect(() => {
+    shuffleRef.current = isShuffle;
+  }, [isShuffle]);
+
+  useEffect(() => {
+    if (externalIsPlaying !== undefined) {
+      desiredPlayStateRef.current = externalIsPlaying;
     }
-  }, [currentTrack, playlist]);
+  }, [externalIsPlaying]);
 
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !currentTrack) return;
+    currentTrackRef.current = currentTrack;
+  }, [currentTrack]);
 
-    // Pause first to prevent interruption errors
-    audio.pause();
-    
-    // Load new track
+  const preloadNextForTrack = useCallback((trackId: string) => {
+    if (!gaplessEngineRef.current) return;
+    if (shuffleRef.current || repeatStateRef.current.repeatOne) return;
+
+    const tracks = playlistRef.current;
+    if (!tracks.length) return;
+
+    const currentIndex = tracks.findIndex(t => t.id === trackId);
+    if (currentIndex === -1) return;
+
+    let nextIndex = currentIndex + 1;
+    if (nextIndex >= tracks.length) {
+      if (!repeatStateRef.current.repeatAll) {
+        return;
+      }
+      nextIndex = 0;
+    }
+
+    if (nextIndex === currentIndex) return;
+
+    const nextTrack = tracks[nextIndex];
+    if (!nextTrack || !nextTrack.audioUrl) return;
+
+    gaplessEngineRef.current.preloadNextTrack({
+      url: nextTrack.audioUrl,
+      id: nextTrack.id,
+    });
+  }, []);
+
+  const logTrackPlayback = (track: Track) => {
+    addRecentlyPlayedTrack({
+      trackId: track.id,
+      trackTitle: track.title || track.name || 'Untitled',
+      artistName: track.artist,
+      coverArt: track.coverImage || track.coverArt || '',
+      audioUrl: track.audioUrl || '',
+      playedAt: Date.now(),
+    }).catch(err => console.error('Failed to track recently played:', err));
+  };
+
+  // Initialize gapless audio engine
+  useEffect(() => {
+    if (!gaplessEngineRef.current) {
+      gaplessEngineRef.current = new GaplessAudioEngine();
+      
+      // Set up callbacks
+      gaplessEngineRef.current.setCallbacks({
+        onStateChange: (state) => {
+          if (state.isPlaying !== undefined) {
+            setIsPlaying(state.isPlaying);
+            onPlayPauseRef.current?.(state.isPlaying);
+          }
+          if (state.currentTime !== undefined) {
+            setCurrentTime(state.currentTime);
+          }
+          if (state.duration !== undefined) {
+            setDuration(state.duration);
+          }
+          if (state.volume !== undefined) {
+            setVolume(state.volume);
+          }
+          if (state.isMuted !== undefined) {
+            setIsMuted(state.isMuted);
+          }
+        },
+        onTrackEnd: () => {
+          wallCompletionRef.current?.(currentTrackRef.current);
+          if (repeatStateRef.current.repeatOne) {
+            console.log('Looping current track');
+            gaplessEngineRef.current?.seek(0);
+            gaplessEngineRef.current?.play();
+          } else {
+            handleNextRef.current?.('auto');
+          }
+        },
+        onTrackChange: (trackId) => {
+          console.log('Gapless transition to track:', trackId);
+          engineDrivenTrackRef.current = trackId;
+          preloadNextForTrack(trackId);
+          const updatedTrack = playlistRef.current.find(t => t.id === trackId);
+          if (updatedTrack && onTrackChangeRef.current) {
+            onTrackChangeRef.current(updatedTrack);
+          }
+        }
+      });
+      
+      // Set initial volume
+      gaplessEngineRef.current.setVolume(1);
+    }
+
+    return () => {
+      gaplessEngineRef.current?.destroy();
+      gaplessEngineRef.current = null;
+    };
+  }, [preloadNextForTrack]);
+
+  // Update EQ when bands change
+  useEffect(() => {
+    if (gaplessEngineRef.current) {
+      gaplessEngineRef.current.setEQ(eqBands.bass, eqBands.mid, eqBands.treble);
+    }
+  }, [eqBands]);
+
+  // Preload is now handled inline when track starts playing
+
+  // Load track when it changes
+  useEffect(() => {
+    const engine = gaplessEngineRef.current;
+    if (!currentTrack || !engine) return;
+
+    if (engineDrivenTrackRef.current === currentTrack.id) {
+      engineDrivenTrackRef.current = null;
+      logTrackPlayback(currentTrack);
+      return;
+    }
+
     if (!currentTrack.audioUrl) {
       console.warn('No audioUrl for current track');
       return;
     }
 
-    audio.src = currentTrack.audioUrl;
-    audio.load();
+    const shouldAutoPlay = desiredPlayStateRef.current;
 
-    // Track recently played
-    addRecentlyPlayedTrack({
-      trackId: currentTrack.id,
-      trackTitle: currentTrack.title || currentTrack.name || 'Untitled',
-      artistName: currentTrack.artist,
-      coverArt: currentTrack.coverImage || currentTrack.coverArt || '',
-      audioUrl: currentTrack.audioUrl,
-      playedAt: Date.now(),
-    }).catch(err => console.error('Failed to track recently played:', err));
-
-    // Add error handler
-    const handleError = (e: Event) => {
-      console.error('Audio loading error:', e);
-      console.error('Failed to load:', currentTrack.audioUrl);
-      setIsPlaying(false);
-      onPlayPause?.(false);
-    };
-    
-    audio.addEventListener('error', handleError);
-
-    // Auto play if was playing
-    if (isPlaying) {
-      // Wait for metadata to load before playing
-      const handleCanPlay = () => {
-        audio.play().catch(err => {
-          console.error('Playback error:', err);
-          setIsPlaying(false);
-          onPlayPause?.(false);
-        });
-        audio.removeEventListener('canplay', handleCanPlay);
-      };
-      audio.addEventListener('canplay', handleCanPlay);
-    }
-    
-    return () => {
-      audio.removeEventListener('error', handleError);
-    };
-  }, [currentTrack]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const handleTimeUpdate = () => setCurrentTime(audio.currentTime);
-    const handleLoadedMetadata = () => setDuration(audio.duration);
-    const handleEnded = () => {
-      if (isRepeat) {
-        audio.currentTime = 0;
-        audio.play();
-      } else {
-        // Seamless gapless playback - auto-advance to next track with no gap
-        handleNext();
+    if (engine.usePreloadedTrack(currentTrack.id, shouldAutoPlay)) {
+      console.log('Used preloaded buffer for track:', currentTrack.id);
+      isLoadingTrackRef.current = false;
+      logTrackPlayback(currentTrack);
+      preloadNextForTrack(currentTrack.id);
+      // Execute any pending skip queued during load
+      const pending = pendingSkipRef.current;
+      pendingSkipRef.current = null;
+      if (pending === 'next') {
+        handleNextRef.current?.('auto');
+      } else if (pending === 'prev') {
+        const tracks = playlistRef.current;
+        const currentIndex = tracks.findIndex(t => t.id === currentTrack.id);
+        const prevIndex = (currentIndex - 1 + tracks.length) % tracks.length;
+        onTrackChangeRef.current?.(tracks[prevIndex]);
       }
-    };
+      return;
+    }
 
-    audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
-    audio.addEventListener('ended', handleEnded);
+    const requestId = ++loadRequestIdRef.current;
+    isLoadingTrackRef.current = true;
+    console.log('Loading new track:', currentTrack.title, 'requestId:', requestId);
 
-    // Support gapless playback by monitoring current time near the end
-    const handleNearEnd = () => {
-      // When near the end (last 100ms), start loading next track audio
-      if (audio.duration && audio.currentTime > audio.duration - 0.1) {
-        const currentIndex = playlist.findIndex(t => t.id === currentTrack?.id);
-        if (currentIndex !== -1) {
-          const nextIndex = (currentIndex + 1) % playlist.length;
-          const nextTrack = playlist[nextIndex];
-          if (nextTrack && nextAudioRef.current && nextTrack.audioUrl) {
-            nextAudioRef.current.src = nextTrack.audioUrl;
-            nextAudioRef.current.load();
-          }
+    // Stop whatever is currently playing so skips don't leave overlapping audio
+    engine.pause();
+
+    logTrackPlayback(currentTrack);
+
+    engine.loadTrack({
+      url: currentTrack.audioUrl,
+      id: currentTrack.id
+    }).then(() => {
+      if (loadRequestIdRef.current !== requestId) {
+        return;
+      }
+      isLoadingTrackRef.current = false;
+      console.log('Track loaded successfully, starting playback');
+      engine.seek(0);
+      if (desiredPlayStateRef.current) {
+        engine.play();
+      } else {
+        engine.pause();
+      }
+      preloadNextForTrack(currentTrack.id);
+    }).catch(err => {
+      if (loadRequestIdRef.current !== requestId) {
+        return;
+      }
+      isLoadingTrackRef.current = false;
+      console.error('Failed to load track:', err);
+      desiredPlayStateRef.current = false;
+      setIsPlaying(false);
+      onPlayPauseRef.current?.(false);
+    });
+  }, [currentTrack, preloadNextForTrack]);
+
+  const togglePlayPause = useCallback(() => {
+    const engine = gaplessEngineRef.current;
+    if (!engine) return;
+
+    const nextDesired = !desiredPlayStateRef.current;
+    desiredPlayStateRef.current = nextDesired;
+
+    if (isLoadingTrackRef.current) {
+      return;
+    }
+
+    if (nextDesired) {
+      engine.play();
+    } else {
+      engine.pause();
+    }
+  }, []);
+
+  const setExternalVolume = useCallback((value: number) => {
+    const engine = gaplessEngineRef.current;
+    if (!engine) return;
+    const clamped = Math.max(0, Math.min(1, value));
+    engine.setVolume(clamped);
+    engine.setMuted(clamped === 0);
+  }, []);
+
+  const setExternalEq = useCallback((bands: { bass: number; mid: number; treble: number }) => {
+    setEqBands(bands);
+  }, [setEqBands]);
+
+  const handleNext = useCallback((reason: 'auto' | 'manual' = 'manual') => {
+    const now = Date.now();
+    if (reason === 'manual') {
+      wallInvalidateRef.current?.('manual-next');
+      if (now - lastSkipAtRef.current < 300) {
+        return;
+      }
+      lastSkipAtRef.current = now;
+    }
+
+    if (isLoadingTrackRef.current) {
+      pendingSkipRef.current = 'next';
+      return;
+    }
+
+    const engine = gaplessEngineRef.current;
+    const tracks = playlistRef.current;
+    const currentTrack = currentTrackRef.current;
+    if (!currentTrack || !tracks.length) return;
+
+    console.log('Skipping to next track');
+    const currentIndex = tracks.findIndex(t => t.id === currentTrack.id);
+    let nextIndex: number = currentIndex;
+
+    if (isShuffle) {
+      if (tracks.length === 1) {
+        console.log('Only one track available, restarting current track');
+        engine?.seek(0);
+        if (desiredPlayStateRef.current) {
+          engine?.play();
+        }
+        return;
+      }
+      do {
+        nextIndex = Math.floor(Math.random() * tracks.length);
+      } while (nextIndex === currentIndex);
+    } else {
+      nextIndex = currentIndex === -1 ? 0 : currentIndex + 1;
+
+      if (nextIndex >= tracks.length) {
+        if (isRepeat) {
+          nextIndex = 0;
+        } else {
+          console.log('End of playlist reached, stopping playback');
+          engine?.pause();
+          desiredPlayStateRef.current = false;
+          setIsPlaying(false);
+          onPlayPauseRef.current?.(false);
+          return;
         }
       }
-    };
+    }
 
-    audio.addEventListener('timeupdate', handleNearEnd);
+    const nextTrack = tracks[nextIndex];
+    if (!nextTrack) {
+      console.warn('No track found for next index', nextIndex);
+      return;
+    }
 
-    return () => {
-      audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      audio.removeEventListener('ended', handleEnded);
-      audio.removeEventListener('timeupdate', handleNearEnd);
-    };
-  }, [isRepeat, currentTrack, playlist]);
-
-  const togglePlayPause = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const newIsPlaying = !isPlaying;
-
-    if (newIsPlaying) {
-      const playPromise = audio.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(err => {
-          console.error('Playback error:', err);
-          setIsPlaying(false);
-          onPlayPause?.(false);
-          return;
-        });
+    if (nextTrack.id === currentTrack.id) {
+      console.log('Next track resolved to current track, restarting');
+      engine?.seek(0);
+      if (desiredPlayStateRef.current) {
+        engine?.play();
       }
-    } else {
-      audio.pause();
+      return;
     }
 
-    setIsPlaying(newIsPlaying);
-    onPlayPause?.(newIsPlaying);
-  };
-
-  const handleNext = () => {
-    if (!currentTrack || playlist.length === 0) return;
-    
-    console.log('Skipping to next track');
-    const currentIndex = playlist.findIndex(t => t.id === currentTrack.id);
-    let nextIndex;
-    
-    if (isShuffle) {
-      nextIndex = Math.floor(Math.random() * playlist.length);
-    } else {
-      nextIndex = (currentIndex + 1) % playlist.length;
-    }
-    
+    engine?.pause();
     console.log(`Current index: ${currentIndex}, Next index: ${nextIndex}`);
-    onTrackChange?.(playlist[nextIndex]);
-  };
+    onTrackChangeRef.current?.(nextTrack);
+  }, [isShuffle, isRepeat]);
 
-  const handlePrevious = () => {
-    if (!currentTrack || playlist.length === 0) return;
+  useEffect(() => {
+    handleNextRef.current = handleNext;
+  }, [handleNext]);
+
+  const handlePrevious = useCallback(() => {
+    wallInvalidateRef.current?.('manual-prev');
+    const now = Date.now();
+    if (isLoadingTrackRef.current) {
+      pendingSkipRef.current = 'prev';
+      return;
+    }
+    if (now - lastSkipAtRef.current < 300) {
+      return;
+    }
+    lastSkipAtRef.current = now;
+    const engine = gaplessEngineRef.current;
+    const tracks = playlistRef.current;
+    const currentTrack = currentTrackRef.current;
+    if (!currentTrack || !tracks.length || !engine) return;
     
     console.log('Skipping to previous track');
-    const audio = audioRef.current;
-    if (audio && audio.currentTime > 3) {
+    if (currentTime > 3) {
       console.log('Restarting current track (>3s)');
-      audio.currentTime = 0;
+      engine.seek(0);
       return;
     }
     
-    const currentIndex = playlist.findIndex(t => t.id === currentTrack.id);
-    const prevIndex = (currentIndex - 1 + playlist.length) % playlist.length;
+    const currentIndex = tracks.findIndex(t => t.id === currentTrack.id);
+    if (currentIndex === -1) {
+      console.warn('Current track not found in playlist');
+      return;
+    }
+
+    let prevIndex: number;
+    if (isShuffle && tracks.length > 1) {
+      do {
+        prevIndex = Math.floor(Math.random() * tracks.length);
+      } while (prevIndex === currentIndex);
+    } else {
+      prevIndex = (currentIndex - 1 + tracks.length) % tracks.length;
+    }
     
     console.log(`Current index: ${currentIndex}, Previous index: ${prevIndex}`);
-    onTrackChange?.(playlist[prevIndex]);
-  };
+    engine.pause();
+    onTrackChangeRef.current?.(tracks[prevIndex]);
+  }, [isShuffle]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const audio = audioRef.current;
-    if (!audio) return;
+    if (!gaplessEngineRef.current) return;
+    wallInvalidateRef.current?.('seek');
     
     const newTime = parseFloat(e.target.value);
-    audio.currentTime = newTime;
-    setCurrentTime(newTime);
+    gaplessEngineRef.current.seek(newTime);
   };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const audio = audioRef.current;
-    if (!audio) return;
+    if (!gaplessEngineRef.current) return;
     
     const newVolume = parseFloat(e.target.value);
-    audio.volume = newVolume;
-    setVolume(newVolume);
-    setIsMuted(newVolume === 0);
+    gaplessEngineRef.current.setVolume(newVolume);
+    gaplessEngineRef.current.setMuted(newVolume === 0);
   };
 
   const toggleMute = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
+    if (!gaplessEngineRef.current) return;
     
-    if (isMuted) {
-      audio.volume = volume || 0.5;
-      setIsMuted(false);
-    } else {
-      audio.volume = 0;
-      setIsMuted(true);
-    }
+    const newMuted = !isMuted;
+    gaplessEngineRef.current.setMuted(newMuted);
   };
+
+  const handleCoverClick = useCallback(() => {
+    onExpandPlayer?.();
+  }, [onExpandPlayer]);
 
   const formatTime = (seconds: number) => {
     if (isNaN(seconds)) return '0:00';
@@ -247,32 +487,44 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
   useEffect(() => {
     if (onControlsReady) {
       onControlsReady({
-        audioRef,
-        isPlaying: externalIsPlaying !== undefined ? externalIsPlaying : isPlaying,
+        gaplessEngine: gaplessEngineRef.current,
+        isPlaying,
         togglePlayPause,
         handleNext,
         handlePrevious,
         currentTime,
         duration,
         formatTime,
+        volume,
+        setVolume: setExternalVolume,
+        eqBands,
+        setEqBands: setExternalEq,
+        invalidateWallSession: wallTracker.invalidateSession,
+        wallSessionCount: wallTracker.consecutiveTracks,
       });
     }
-  }, [isPlaying, currentTime, duration, onControlsReady, externalIsPlaying]);
+  }, [
+    isPlaying,
+    currentTime,
+    duration,
+    volume,
+    eqBands,
+    onControlsReady,
+    togglePlayPause,
+    handleNext,
+    handlePrevious,
+    setExternalVolume,
+    setExternalEq,
+    wallTracker.consecutiveTracks,
+    wallTracker.invalidateSession,
+  ]);
 
-  // Don't render UI if not visible, but keep audio element alive
-  if (!currentTrack) {
-    return null;
-  }
+  // Render empty-state UI when no track
 
   return (
     <>
-      {/* Always render audio elements */}
-      <audio ref={audioRef} />
-      {/* Hidden audio element for preloading next track (gapless playback) */}
-      <audio ref={nextAudioRef} />
-      
-      {/* Only show UI when visible and not fully collapsed */}
-      {isVisible && !isCollapsed && (
+      {/* Always show fixed player; shows empty state if no track */}
+      {isVisible && (
         <div
           className="fixed bottom-0 left-0 right-0 z-50 backdrop-blur-xl transition-all duration-300"
           style={{
@@ -280,44 +532,132 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
             borderTop: '1px solid #333333',
           }}
         >
-          {/* Collapse Toggle Button */}
-          <button
-            onClick={() => setIsCollapsed(!isCollapsed)}
-            className="fixed bottom-24 right-4 w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-110"
-            style={{
-              backgroundColor: 'rgba(26, 26, 26, 0.8)',
-              border: '1px solid #333333',
-              backdropFilter: 'blur(10px)',
-            }}
-          >
-            <ChevronDown size={14} color="#a0a0a0" />
-          </button>
-
-          {/* Expanded View - Full Player */}
-          <div className="max-w-screen-2xl mx-auto px-4 py-3">
-            <div className="flex items-center gap-4">
-              {/* Track Info */}
-              <div className="flex items-center gap-3 max-w-xs min-w-0">
-                <ImageWithFallback
-                  src={currentTrack.coverImage || currentTrack.coverArt}
-                  alt={currentTrack.title || currentTrack.name || 'Track'}
-                  className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
-                />
+          {/* Player */}
+          <div className="max-w-screen-2xl mr-auto px-4 py-2">
+            {currentTrack ? (
+            <div className="mr-auto" style={{ maxWidth: '1500px', width: '100%' }}>
+              <div className="player-bottom-row">
+              {/* Track Info - Left Column (Fixed Width) */}
+              <div className="player-bottom-left flex items-center gap-3 w-full">
+                <button
+                  type="button"
+                  aria-label="Open full player"
+                  onClick={handleCoverClick}
+                  className="flex-shrink-0 rounded-lg overflow-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d32f2f]"
+                  style={{ lineHeight: 0 }}
+                >
+                  <ImageWithFallback
+                    src={currentTrack.coverImage || currentTrack.coverArt}
+                    alt={currentTrack.title || currentTrack.name || 'Track'}
+                    className="w-14 h-14 object-cover"
+                  />
+                </button>
                 <div className="min-w-0 flex-1">
-                  <h4 className="truncate mono" style={{ color: '#e0e0e0', fontSize: '0.9rem' }}>
-                    {currentTrack.title || currentTrack.name || 'Untitled'}
-                  </h4>
-                  <p className="truncate mono" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
+                  <div className="flex flex-col gap-1 mb-1">
+                    <button
+                      type="button"
+                      onClick={handleCoverClick}
+                      className="text-left truncate mono hover:text-[#d32f2f] transition-colors"
+                      style={{ color: '#e0e0e0', fontSize: '0.9rem', margin: 0, lineHeight: '1.2', fontWeight: 700 }}
+                      title={currentTrack.title || currentTrack.name || 'Untitled'}
+                    >
+                      {currentTrack.title || currentTrack.name || 'Untitled'}
+                    </button>
+                  </div>
+                  <p className="truncate mono" style={{ color: '#a0a0a0', fontSize: '0.75rem', marginTop: '0px', lineHeight: '1.2' }}>
                     {currentTrack.artist}
                   </p>
+                  <div className="flex flex-wrap items-center gap-1 mt-2">
+                    {audioMeta?.codecLabel && (
+                      <span
+                        className="mono"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: '0 8px',
+                          height: '22px',
+                          borderRadius: '6px',
+                          border: '1px solid #333333',
+                          background: 'rgba(26,26,26,0.6)',
+                          fontSize: '0.72rem',
+                          color: '#e0e0e0',
+                          flexShrink: 0,
+                          minWidth: '88px'
+                        }}
+                      >
+                        {audioMeta.codecLabel}
+                      </span>
+                    )}
+                    {(audioMeta?.bitDepth || audioMeta?.sampleRate) && (
+                      <span
+                        className="mono"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '4px',
+                          minWidth: '132px',
+                          height: '22px',
+                          borderRadius: '6px',
+                          border: '1px solid #333333',
+                          background: 'rgba(26,26,26,0.6)',
+                          padding: '0 8px',
+                          fontSize: '0.72rem',
+                          flexShrink: 0
+                        }}
+                      >
+                        <span style={{ color: audioMeta?.bitDepth === 24 ? '#c6a700' : '#a0a0a0' }}>{audioMeta?.bitDepth ? `${audioMeta.bitDepth}-bit` : ''}</span>
+                        <span style={{ color: '#555' }}>/</span>
+                        <span style={{ color: '#d32f2f' }}>{audioMeta?.sampleRate ? `${audioMeta.sampleRate}kHz` : ''}</span>
+                      </span>
+                    )}
+                    {audioMeta?.bitrateKbps && (
+                      <span
+                        className="mono"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: '0 8px',
+                          height: '22px',
+                          borderRadius: '6px',
+                          border: '1px solid #333333',
+                          background: 'rgba(26,26,26,0.6)',
+                          fontSize: '0.72rem',
+                          color: '#e0e0e0',
+                          flexShrink: 0
+                        }}
+                      >
+                        {formatBitrate(audioMeta.bitrateKbps)}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              {/* Center Controls */}
-              <div className="flex flex-col items-center gap-2 flex-1">
+              {/* Center Controls - Middle Column (Always Centered) */}
+              <div className="player-bottom-center flex flex-col items-center gap-2 w-full">
                 {/* Control Buttons */}
                 <div className="flex items-center gap-3">
+                  {/* Create Playlist inside player */}
                   <button
+                    type="button"
+                    aria-label="Create playlist"
+                    onClick={() => onCreatePlaylist && onCreatePlaylist()}
+                    className="p-2 rounded-lg transition-all duration-200 hover:scale-110"
+                    style={{ color: '#e0e0e0' }}
+                    title="Create Playlist"
+                  >
+                    {/* Plus icon inline SVG to avoid extra imports if not present */}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="12" y1="5" x2="12" y2="19"></line>
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={isShuffle ? 'Disable shuffle' : 'Enable shuffle'}
                     onClick={() => setIsShuffle(!isShuffle)}
                     className="p-2 rounded-lg transition-all duration-200 hover:scale-110"
                     style={{
@@ -328,6 +668,8 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
                   </button>
 
                   <button
+                    type="button"
+                    aria-label="Previous track"
                     onClick={handlePrevious}
                     className="p-2 rounded-lg transition-all duration-200 hover:scale-110"
                     style={{ color: '#e0e0e0' }}
@@ -336,6 +678,8 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
                   </button>
 
                   <button
+                    type="button"
+                    aria-label={isPlaying ? 'Pause' : 'Play'}
                     onClick={togglePlayPause}
                     className="w-10 h-10 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-110"
                     style={{
@@ -350,7 +694,9 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
                   </button>
 
                   <button
-                    onClick={handleNext}
+                    type="button"
+                    aria-label="Next track"
+                    onClick={() => handleNext('manual')}
                     className="p-2 rounded-lg transition-all duration-200 hover:scale-110"
                     style={{ color: '#e0e0e0' }}
                   >
@@ -358,18 +704,46 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
                   </button>
 
                   <button
-                    onClick={() => setIsRepeat(!isRepeat)}
-                    className="p-2 rounded-lg transition-all duration-200 hover:scale-110"
-                    style={{
-                      color: isRepeat ? '#d32f2f' : '#a0a0a0',
+                    onClick={() => {
+                      // Cycle through: off -> repeat playlist -> repeat one -> off
+                      if (!isRepeat && !isRepeatOne) {
+                        setIsRepeat(true);
+                        setIsRepeatOne(false);
+                      } else if (isRepeat && !isRepeatOne) {
+                        setIsRepeat(false);
+                        setIsRepeatOne(true);
+                      } else {
+                        setIsRepeat(false);
+                        setIsRepeatOne(false);
+                      }
                     }}
+                    className="p-2 rounded-lg transition-all duration-200 hover:scale-110 relative"
+                    style={{
+                      color: (isRepeat || isRepeatOne) ? '#d32f2f' : '#a0a0a0',
+                    }}
+                    title={isRepeatOne ? 'Repeat One' : isRepeat ? 'Repeat Playlist' : 'Repeat Off'}
                   >
                     <Repeat size={16} />
+                    {isRepeatOne && (
+                      <span 
+                        className="absolute"
+                        style={{
+                          fontSize: '0.5rem',
+                          fontWeight: 'bold',
+                          color: '#d32f2f',
+                          top: '50%',
+                          left: '50%',
+                          transform: 'translate(-50%, -50%)',
+                        }}
+                      >
+                        1
+                      </span>
+                    )}
                   </button>
                 </div>
 
                 {/* Progress Bar */}
-                <div className="flex items-center gap-2 w-full max-w-xl">
+                <div className="flex items-center gap-2 w-full" style={{ maxWidth: '500px' }}>
                   <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem', minWidth: '40px' }}>
                     {formatTime(currentTime)}
                   </span>
@@ -383,20 +757,338 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
                     style={{
                       height: '4px',
                       borderRadius: '2px',
-                      background: `linear-gradient(to right, #d32f2f ${(currentTime / duration) * 100}%, #333333 ${(currentTime / duration) * 100}%)`,
+                      background: `linear-gradient(to right, #d32f2f ${duration > 0 ? (currentTime / duration) * 100 : 0}%, #333333 ${duration > 0 ? (currentTime / duration) * 100 : 0}%)`,
                       appearance: 'none',
                       cursor: 'pointer',
                     }}
                   />
-                  <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem', minWidth: '40px' }}>
+                  <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem', minWidth: '40px' }} aria-live="polite">
                     {formatTime(duration)}
                   </span>
                 </div>
               </div>
 
-              {/* Volume Control */}
-              <div className="flex items-center gap-2 flex-1 justify-end">
-                <button onClick={toggleMute} className="p-2 rounded-lg transition-all duration-200 hover:scale-110">
+              {/* Volume Control & EQ - Right Column */}
+              <div className="player-bottom-right flex items-center gap-3 justify-end relative w-full md:ml-auto">
+                {/* EQ Button with Dropdown */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    aria-label={showEQ ? 'Hide equalizer' : 'Show equalizer'}
+                    onClick={() => setShowEQ(!showEQ)}
+                    className="p-2 rounded-lg transition-all duration-200 hover:scale-110"
+                    style={{ color: showEQ ? '#d32f2f' : '#a0a0a0' }}
+                    title="Equalizer"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="4" y1="21" x2="4" y2="14"></line>
+                      <line x1="4" y1="10" x2="4" y2="3"></line>
+                      <line x1="12" y1="21" x2="12" y2="12"></line>
+                      <line x1="12" y1="8" x2="12" y2="3"></line>
+                      <line x1="20" y1="21" x2="20" y2="16"></line>
+                      <line x1="20" y1="12" x2="20" y2="3"></line>
+                      <line x1="2" y1="14" x2="6" y2="14"></line>
+                      <line x1="10" y1="8" x2="14" y2="8"></line>
+                      <line x1="18" y1="16" x2="22" y2="16"></line>
+                    </svg>
+                  </button>
+
+                  {/* EQ Dropdown */}
+                  {showEQ && (
+                    <div
+                      className="absolute bottom-full right-0 mb-2 p-4 rounded-lg backdrop-blur-xl"
+                      style={{
+                        backgroundColor: 'rgba(26, 26, 26, 0.98)',
+                        border: '1px solid #333333',
+                        boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5)',
+                        width: '240px',
+                      }}
+                      role="group"
+                      aria-label="Equalizer controls"
+                    >
+                      <div className="flex flex-col gap-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="mono" style={{ color: '#e0e0e0', fontSize: '0.8rem', fontWeight: 600 }}>EQUALIZER</span>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              aria-label={showAdvancedEQ ? 'Hide advanced EQ' : 'Show advanced EQ'}
+                              onClick={() => setShowAdvancedEQ(!showAdvancedEQ)}
+                              className="mono text-xs px-2 py-1 rounded transition-colors"
+                              style={{ 
+                                color: showAdvancedEQ ? '#d32f2f' : '#a0a0a0', 
+                                backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                                border: showAdvancedEQ ? '1px solid #d32f2f' : 'none',
+                              }}
+                            >
+                              Adv
+                            </button>
+                            <button
+                              type="button"
+                              aria-label="Reset equalizer"
+                              onClick={() => {
+                                setEqBands({ bass: 0, mid: 0, treble: 0 });
+                                setAdvancedEQ({ bassFreq: 200, midFreq: 1000, midQ: 1, trebleFreq: 3200 });
+                              }}
+                              className="mono text-xs px-2 py-1 rounded transition-colors"
+                              style={{ color: '#a0a0a0', backgroundColor: 'rgba(255, 255, 255, 0.05)' }}
+                            >
+                              Reset
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Bass */}
+                        <div className="flex items-center gap-3">
+                          <span className="mono whitespace-nowrap" style={{ color: '#a0a0a0', fontSize: '0.7rem', minWidth: '50px' }}>Bass</span>
+                          <input
+                            type="range"
+                            min="-12"
+                            max="12"
+                            step="1"
+                            value={eqBands.bass}
+                            onChange={(e) => setEqBands({ ...eqBands, bass: parseFloat(e.target.value) })}
+                            className="flex-1"
+                            style={{
+                              height: '4px',
+                              borderRadius: '2px',
+                              background: `linear-gradient(to right, #d32f2f ${((eqBands.bass + 12) / 24) * 100}%, #333333 ${((eqBands.bass + 12) / 24) * 100}%)`,
+                              appearance: 'none',
+                              cursor: 'pointer',
+                            }}
+                            aria-label="Bass gain"
+                            aria-valuemin={-12}
+                            aria-valuemax={12}
+                            aria-valuenow={eqBands.bass}
+                            aria-orientation="horizontal"
+                          />
+                          <span
+                            className="mono"
+                            style={eqValueStyle}
+                          >
+                            {eqBands.bass > 0 ? '+' : ''}{eqBands.bass} dB
+                          </span>
+                        </div>
+
+                        {/* Mid */}
+                        <div className="flex items-center gap-3">
+                          <span className="mono whitespace-nowrap" style={{ color: '#a0a0a0', fontSize: '0.7rem', minWidth: '50px' }}>Mid</span>
+                          <input
+                            type="range"
+                            min="-12"
+                            max="12"
+                            step="1"
+                            value={eqBands.mid}
+                            onChange={(e) => setEqBands({ ...eqBands, mid: parseFloat(e.target.value) })}
+                            className="flex-1"
+                            style={{
+                              height: '4px',
+                              borderRadius: '2px',
+                              background: `linear-gradient(to right, #d32f2f ${((eqBands.mid + 12) / 24) * 100}%, #333333 ${((eqBands.mid + 12) / 24) * 100}%)`,
+                              appearance: 'none',
+                              cursor: 'pointer',
+                            }}
+                            aria-label="Mid gain"
+                            aria-valuemin={-12}
+                            aria-valuemax={12}
+                            aria-valuenow={eqBands.mid}
+                            aria-orientation="horizontal"
+                          />
+                          <span
+                            className="mono"
+                            style={eqValueStyle}
+                          >
+                            {eqBands.mid > 0 ? '+' : ''}{eqBands.mid} dB
+                          </span>
+                        </div>
+
+                        {/* Treble */}
+                        <div className="flex items-center gap-3">
+                          <span className="mono whitespace-nowrap" style={{ color: '#a0a0a0', fontSize: '0.7rem', minWidth: '50px' }}>Treble</span>
+                          <input
+                            type="range"
+                            min="-12"
+                            max="12"
+                            step="1"
+                            value={eqBands.treble}
+                            onChange={(e) => setEqBands({ ...eqBands, treble: parseFloat(e.target.value) })}
+                            className="flex-1"
+                            style={{
+                              height: '4px',
+                              borderRadius: '2px',
+                              background: `linear-gradient(to right, #d32f2f ${((eqBands.treble + 12) / 24) * 100}%, #333333 ${((eqBands.treble + 12) / 24) * 100}%)`,
+                              appearance: 'none',
+                              cursor: 'pointer',
+                            }}
+                            aria-label="Treble gain"
+                            aria-valuemin={-12}
+                            aria-valuemax={12}
+                            aria-valuenow={eqBands.treble}
+                            aria-orientation="horizontal"
+                          />
+                          <span
+                            className="mono"
+                            style={eqValueStyle}
+                          >
+                            {eqBands.treble > 0 ? '+' : ''}{eqBands.treble} dB
+                          </span>
+                        </div>
+
+                        {/* Advanced EQ Controls */}
+                        {showAdvancedEQ && (
+                          <>
+                            <div 
+                              className="my-2"
+                              style={{
+                                height: '1px',
+                                backgroundColor: '#333333',
+                              }}
+                            />
+                            
+                            <span className="mono" style={{ color: '#666666', fontSize: '0.7rem' }}>
+                              Frequency Controls
+                            </span>
+
+                            {/* Bass Frequency */}
+                            <div className="flex items-center gap-3">
+                              <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.65rem', minWidth: '50px' }}>Bass Hz</span>
+                              <input
+                                type="range"
+                                min="20"
+                                max="500"
+                                step="10"
+                                value={advancedEQ.bassFreq}
+                                onChange={(e) => {
+                                  const newFreq = parseFloat(e.target.value);
+                                  setAdvancedEQ({ ...advancedEQ, bassFreq: newFreq });
+                                  gaplessEngineRef.current?.setAdvancedEQ(newFreq, advancedEQ.midFreq, advancedEQ.midQ, advancedEQ.trebleFreq);
+                                }}
+                                className="flex-1"
+                                style={{
+                                  height: '3px',
+                                  borderRadius: '2px',
+                                  background: `linear-gradient(to right, #d32f2f ${((advancedEQ.bassFreq - 20) / 480) * 100}%, #333333 ${((advancedEQ.bassFreq - 20) / 480) * 100}%)`,
+                                  appearance: 'none',
+                                  cursor: 'pointer',
+                                }}
+                                aria-label="Bass frequency"
+                                aria-valuemin={20}
+                                aria-valuemax={500}
+                                aria-valuenow={advancedEQ.bassFreq}
+                                aria-orientation="horizontal"
+                              />
+                              <span className="mono" style={{ color: '#666666', fontSize: '0.55rem', minWidth: '45px', textAlign: 'right' }}>
+                                {advancedEQ.bassFreq}
+                              </span>
+                            </div>
+
+                            {/* Mid Frequency */}
+                            <div className="flex items-center gap-3">
+                              <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.65rem', minWidth: '50px' }}>Mid Hz</span>
+                              <input
+                                type="range"
+                                min="200"
+                                max="5000"
+                                step="100"
+                                value={advancedEQ.midFreq}
+                                onChange={(e) => {
+                                  const newFreq = parseFloat(e.target.value);
+                                  setAdvancedEQ({ ...advancedEQ, midFreq: newFreq });
+                                  gaplessEngineRef.current?.setAdvancedEQ(advancedEQ.bassFreq, newFreq, advancedEQ.midQ, advancedEQ.trebleFreq);
+                                }}
+                                className="flex-1"
+                                style={{
+                                  height: '3px',
+                                  borderRadius: '2px',
+                                  background: `linear-gradient(to right, #d32f2f ${((advancedEQ.midFreq - 200) / 4800) * 100}%, #333333 ${((advancedEQ.midFreq - 200) / 4800) * 100}%)`,
+                                  appearance: 'none',
+                                  cursor: 'pointer',
+                                }}
+                                aria-label="Mid frequency"
+                                aria-valuemin={200}
+                                aria-valuemax={5000}
+                                aria-valuenow={advancedEQ.midFreq}
+                                aria-orientation="horizontal"
+                              />
+                              <span className="mono" style={{ color: '#666666', fontSize: '0.55rem', minWidth: '45px', textAlign: 'right' }}>
+                                {advancedEQ.midFreq}
+                              </span>
+                            </div>
+
+                            {/* Mid Q */}
+                            <div className="flex items-center gap-3">
+                              <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.65rem', minWidth: '50px' }}>Mid Q</span>
+                              <input
+                                type="range"
+                                min="0.1"
+                                max="10"
+                                step="0.1"
+                                value={advancedEQ.midQ}
+                                onChange={(e) => {
+                                  const newQ = parseFloat(e.target.value);
+                                  setAdvancedEQ({ ...advancedEQ, midQ: newQ });
+                                  gaplessEngineRef.current?.setAdvancedEQ(advancedEQ.bassFreq, advancedEQ.midFreq, newQ, advancedEQ.trebleFreq);
+                                }}
+                                className="flex-1"
+                                style={{
+                                  height: '3px',
+                                  borderRadius: '2px',
+                                  background: `linear-gradient(to right, #d32f2f ${((advancedEQ.midQ - 0.1) / 9.9) * 100}%, #333333 ${((advancedEQ.midQ - 0.1) / 9.9) * 100}%)`,
+                                  appearance: 'none',
+                                  cursor: 'pointer',
+                                }}
+                                aria-label="Mid Q"
+                                aria-valuemin={0.1}
+                                aria-valuemax={10}
+                                aria-valuenow={advancedEQ.midQ}
+                                aria-orientation="horizontal"
+                              />
+                              <span className="mono" style={{ color: '#666666', fontSize: '0.55rem', minWidth: '45px', textAlign: 'right' }}>
+                                {advancedEQ.midQ.toFixed(1)}
+                              </span>
+                            </div>
+
+                            {/* Treble Frequency */}
+                            <div className="flex items-center gap-3">
+                              <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.65rem', minWidth: '50px' }}>Treble Hz</span>
+                              <input
+                                type="range"
+                                min="2000"
+                                max="16000"
+                                step="100"
+                                value={advancedEQ.trebleFreq}
+                                onChange={(e) => {
+                                  const newFreq = parseFloat(e.target.value);
+                                  setAdvancedEQ({ ...advancedEQ, trebleFreq: newFreq });
+                                  gaplessEngineRef.current?.setAdvancedEQ(advancedEQ.bassFreq, advancedEQ.midFreq, advancedEQ.midQ, newFreq);
+                                }}
+                                className="flex-1"
+                                style={{
+                                  height: '3px',
+                                  borderRadius: '2px',
+                                  background: `linear-gradient(to right, #d32f2f ${((advancedEQ.trebleFreq - 2000) / 14000) * 100}%, #333333 ${((advancedEQ.trebleFreq - 2000) / 14000) * 100}%)`,
+                                  appearance: 'none',
+                                  cursor: 'pointer',
+                                }}
+                                aria-label="Treble frequency"
+                                aria-valuemin={2000}
+                                aria-valuemax={16000}
+                                aria-valuenow={advancedEQ.trebleFreq}
+                                aria-orientation="horizontal"
+                              />
+                              <span className="mono" style={{ color: '#666666', fontSize: '0.55rem', minWidth: '45px', textAlign: 'right' }}>
+                                {advancedEQ.trebleFreq}
+                              </span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Volume Controls */}
+                <button type="button" aria-label={isMuted ? 'Unmute' : 'Mute'} onClick={toggleMute} className="p-2 rounded-lg transition-all duration-200 hover:scale-110">
                   {isMuted ? (
                     <VolumeX size={18} color="#a0a0a0" />
                   ) : (
@@ -410,7 +1102,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
                   step="0.01"
                   value={isMuted ? 0 : volume}
                   onChange={handleVolumeChange}
-                  className="w-24"
+                  className="w-20 md:w-24"
                   style={{
                     height: '4px',
                     borderRadius: '2px',
@@ -421,6 +1113,12 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
                 />
               </div>
             </div>
+            </div>
+            ) : (
+              <div className="flex items-center justify-center" style={{ minHeight: '48px' }}>
+                <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.9rem' }}>No track playing</span>
+              </div>
+            )}
           </div>
 
           <style>{`
@@ -444,20 +1142,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
         </div>
       )}
 
-      {/* Show expand button when fully collapsed */}
-      {isVisible && isCollapsed && (
-        <button
-          onClick={() => setIsCollapsed(false)}
-          className="fixed bottom-24 right-4 w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-110"
-          style={{
-            backgroundColor: 'rgba(26, 26, 26, 0.8)',
-            border: '1px solid #333333',
-            backdropFilter: 'blur(10px)',
-          }}
-        >
-          <ChevronUp size={14} color="#a0a0a0" />
-        </button>
-      )}
+      {/* No collapse/expand controls */}
     </>
   );
 }
