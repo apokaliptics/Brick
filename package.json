@@ -1,6 +1,6 @@
 {
   "name": "Brick",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "dependencies": {
     "@jsr/supabase__supabase-js": "^2.49.8",
