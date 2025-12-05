@@ -1,3 +1,5 @@
+import { openBrickDB, DB_VERSION } from './db';
+
 // Recently Played Tracks Management
 export interface RecentlyPlayedTrack {
   trackId: string;
@@ -6,39 +8,41 @@ export interface RecentlyPlayedTrack {
   coverArt: string;
   audioUrl: string;
   playedAt: number;
+  album?: string;
+  quality?: string;
+  codecLabel?: string;
+  bitDepth?: number;
+  sampleRate?: number;
+  bitrateKbps?: number;
+  durationSeconds?: number;
   id?: string;
   title?: string;
   artist?: string;
 }
 
-const DB_NAME = 'BrickMusicDB';
 const STORE_NAME = 'recentlyPlayedTracks';
+const LOCAL_TRACK_STORE = 'localTracks';
 
 export async function openRecentlyPlayedDB(): Promise<IDBDatabase> {
-  console.log('Opening recently played tracks DB, version 4');
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 4); // Increased version to force upgrade
+  console.log(`Opening recently played tracks DB, version ${DB_VERSION}`);
+  return openBrickDB();
+}
 
-    request.onerror = () => {
-      console.error('Failed to open recently played tracks DB:', request.error);
-      reject(request.error);
-    };
-    request.onsuccess = () => {
-      console.log('Successfully opened recently played tracks DB');
-      resolve(request.result);
-    };
-
-    request.onupgradeneeded = (event) => {
-      console.log('Upgrading recently played tracks DB');
-      const db = (event.target as IDBOpenDBRequest).result;
-
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        console.log('Creating recentlyPlayedTracks object store');
-        const store = db.createObjectStore(STORE_NAME, { keyPath: 'trackId' });
-        store.createIndex('playedAt', 'playedAt', { unique: false });
-      }
-    };
-  });
+async function getLocalTrackById(trackId: string): Promise<any | null> {
+  try {
+    const db = await openBrickDB();
+    if (!db.objectStoreNames.contains(LOCAL_TRACK_STORE)) return null;
+    return await new Promise((resolve) => {
+      const tx = db.transaction([LOCAL_TRACK_STORE], 'readonly');
+      const store = tx.objectStore(LOCAL_TRACK_STORE);
+      const request = store.get(trackId);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    });
+  } catch (error) {
+    console.error('Failed to load local track for recent playback', error);
+    return null;
+  }
 }
 
 export async function addRecentlyPlayedTrack(track: RecentlyPlayedTrack): Promise<void> {
@@ -74,15 +78,46 @@ export async function getRecentlyPlayedTracks(limit = 10): Promise<RecentlyPlaye
   return new Promise((resolve, reject) => {
     const request = index.getAll();
 
-    request.onsuccess = () => {
+    request.onsuccess = async () => {
       const tracks = request.result as RecentlyPlayedTrack[];
       console.log('Retrieved tracks from DB:', tracks);
       // Sort by playedAt descending and limit
       const sorted = tracks.sort((a, b) => b.playedAt - a.playedAt).slice(0, limit);
       console.log('Sorted and limited tracks:', sorted);
 
+      const enriched = await Promise.all(sorted.map(async (track) => {
+        const needsLocalLookup = !track.audioUrl || track.audioUrl.includes('SoundHelix') || track.audioUrl.startsWith('blob:');
+        if (!needsLocalLookup) {
+          return track;
+        }
+
+        const local = await getLocalTrackById(track.trackId);
+        if (!local) return track;
+
+        let rebuiltUrl = track.audioUrl;
+        try {
+          if (local.file) {
+            rebuiltUrl = URL.createObjectURL(local.file);
+          }
+        } catch (err) {
+          console.error('Failed to rebuild blob URL for recent track', err);
+        }
+
+        return {
+          ...track,
+          audioUrl: rebuiltUrl || track.audioUrl,
+          album: track.album || local.album,
+          quality: track.quality || local.format,
+          codecLabel: track.codecLabel || local.codecLabel,
+          bitDepth: track.bitDepth ?? local.bitDepth,
+          sampleRate: track.sampleRate ?? local.sampleRate,
+          bitrateKbps: track.bitrateKbps ?? local.bitrateKbps,
+          durationSeconds: track.durationSeconds ?? (typeof local.duration === 'number' ? local.duration : undefined),
+        } as RecentlyPlayedTrack;
+      }));
+
       // If no tracks, add some test data for debugging
-      if (sorted.length === 0) {
+      if (enriched.length === 0) {
         console.log('No recently played tracks found, adding test data...');
         const testTracks: RecentlyPlayedTrack[] = [
           {
@@ -92,6 +127,10 @@ export async function getRecentlyPlayedTracks(limit = 10): Promise<RecentlyPlaye
             coverArt: 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=300',
             audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
             playedAt: Date.now() - 1000,
+            album: 'Test Album',
+            quality: 'FLAC',
+            bitrateKbps: 1411,
+            durationSeconds: 240,
           },
           {
             trackId: 'test-track-2',
@@ -100,13 +139,17 @@ export async function getRecentlyPlayedTracks(limit = 10): Promise<RecentlyPlaye
             coverArt: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=300',
             audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
             playedAt: Date.now() - 2000,
+            album: 'Another Album',
+            quality: 'MP3',
+            bitrateKbps: 320,
+            durationSeconds: 260,
           }
         ];
         resolve(testTracks);
         // Also add them to DB for future loads
         testTracks.forEach(track => addRecentlyPlayedTrack(track).catch(console.error));
       } else {
-        resolve(sorted);
+        resolve(enriched);
       }
     };
 

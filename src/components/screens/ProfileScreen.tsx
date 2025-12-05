@@ -5,6 +5,7 @@ import { Playlist, User as UserType } from '../../types';
 import { ImageWithFallback } from '../figma/ImageWithFallback';
 import { BrickCard } from '../BrickCard';
 import { mockPlaylists, mockCurrentUser } from '../../data/mockData';
+import { openBrickDB } from '../../utils/db';
 import pinkStyles from '../../styles/pinkTier.module.css';
 
 interface ProfileScreenProps {
@@ -81,38 +82,7 @@ export function ProfileScreen({ onPlaylistClick, onCreatePlaylist, currentUser, 
     }
   };
 
-  const openPlaylistDB = (): Promise<IDBDatabase> => {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open('BrickMusicDB', 4);
-
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result);
-
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-
-        if (!db.objectStoreNames.contains('localTracks')) {
-          db.createObjectStore('localTracks', { keyPath: 'id' });
-        }
-
-        if (!db.objectStoreNames.contains('playlists')) {
-          db.createObjectStore('playlists', { keyPath: 'id' });
-        }
-
-        // Create recentlyPlayedPlaylists store if it doesn't exist
-        if (!db.objectStoreNames.contains('recentlyPlayedPlaylists')) {
-          const store = db.createObjectStore('recentlyPlayedPlaylists', { keyPath: 'playlistId' });
-          store.createIndex('playedAt', 'playedAt', { unique: false });
-        }
-
-        // Create recentlyPlayedTracks store if it doesn't exist
-        if (!db.objectStoreNames.contains('recentlyPlayedTracks')) {
-          const store = db.createObjectStore('recentlyPlayedTracks', { keyPath: 'trackId' });
-          store.createIndex('playedAt', 'playedAt', { unique: false });
-        }
-      };
-    });
-  };
+  const openPlaylistDB = (): Promise<IDBDatabase> => openBrickDB();
 
   // Get dynamic size based on structural integrity
   const getCardSize = (structuralIntegrity: number | undefined): 'small' | 'medium' | 'large' => {

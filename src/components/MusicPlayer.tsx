@@ -9,6 +9,8 @@ import type { Track } from '../types';
 import { useTrackAudioMeta } from '../hooks/useTrackAudioMeta';
 import { useTheWallTracker } from '../hooks/useTheWallTracker';
 
+const FALLBACK_AUDIO_URL = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
+
 interface MusicPlayerProps {
   currentTrack: Track | null;
   playlist: Track[];
@@ -25,9 +27,13 @@ interface MusicPlayerProps {
 export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause, isVisible = true, onControlsReady, sidebarCollapsed = false, externalIsPlaying, onExpandPlayer, onCreatePlaylist }: MusicPlayerProps) {
   const audioMeta = useTrackAudioMeta(currentTrack ?? null);
   const gaplessEngineRef = useRef<GaplessAudioEngine | null>(null);
+  const htmlAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [usingHtmlAudio, setUsingHtmlAudio] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [scrubTime, setScrubTime] = useState<number | null>(null);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isRepeat, setIsRepeat] = useState(false);
@@ -72,6 +78,11 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
   const pendingSkipRef = useRef<null | 'next' | 'prev'>(null);
   const handleNextRef = useRef<(reason?: 'auto' | 'manual') => void>(() => {});
   const currentTrackRef = useRef<Track | null>(currentTrack);
+  const volumeRef = useRef(volume);
+
+  useEffect(() => {
+    volumeRef.current = volume;
+  }, [volume]);
 
   const wallTracker = useTheWallTracker({
     currentTrack,
@@ -120,6 +131,56 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     currentTrackRef.current = currentTrack;
   }, [currentTrack]);
 
+  const getPlayableUrl = useCallback((track: Track): string => {
+    if (track?.audioUrl && typeof track.audioUrl === 'string' && track.audioUrl.trim().length > 0) {
+      return track.audioUrl;
+    }
+    return FALLBACK_AUDIO_URL;
+  }, []);
+
+  const shouldStreamWithHtml = useCallback((track: Track): boolean => {
+    const durationSeconds = typeof track.duration === 'number' ? track.duration : 0;
+    const inferredBitrate = track.bitrateKbps ?? (track.quality === 'FLAC' ? 900 : 320);
+    const estimatedSizeMb = durationSeconds > 0 ? (inferredBitrate * 1000 / 8 * durationSeconds) / (1024 * 1024) : 0;
+    return durationSeconds >= 900 || estimatedSizeMb >= 80;
+  }, []);
+
+  const startHtmlAudio = useCallback(async (url: string, track: Track, autoPlay: boolean) => {
+    const htmlAudio = htmlAudioRef.current ?? (htmlAudioRef.current = new Audio());
+    setUsingHtmlAudio(true);
+    htmlAudio.src = url;
+    htmlAudio.currentTime = 0;
+    htmlAudio.muted = false;
+    htmlAudio.volume = volumeRef.current;
+    htmlAudio.onended = () => handleNextRef.current?.('auto');
+    htmlAudio.ontimeupdate = () => {
+      setCurrentTime(htmlAudio.currentTime);
+      setDuration(htmlAudio.duration || duration);
+    };
+    htmlAudio.onloadedmetadata = () => {
+      setDuration(htmlAudio.duration || duration);
+    };
+
+    logTrackPlayback(track);
+
+    if (autoPlay) {
+      try {
+        await htmlAudio.play();
+        setIsPlaying(true);
+        onPlayPauseRef.current?.(true);
+      } catch (playErr) {
+        console.error('HTML audio play failed:', playErr);
+        desiredPlayStateRef.current = false;
+        setIsPlaying(false);
+        onPlayPauseRef.current?.(false);
+      }
+    } else {
+      htmlAudio.pause();
+      setIsPlaying(false);
+      onPlayPauseRef.current?.(false);
+    }
+  }, [duration]);
+
   const preloadNextForTrack = useCallback((trackId: string) => {
     if (!gaplessEngineRef.current) return;
     if (shuffleRef.current || repeatStateRef.current.repeatOne) return;
@@ -141,22 +202,33 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     if (nextIndex === currentIndex) return;
 
     const nextTrack = tracks[nextIndex];
-    if (!nextTrack || !nextTrack.audioUrl) return;
+    if (!nextTrack) return;
+
+    const url = getPlayableUrl(nextTrack);
+    if (!url) return;
 
     gaplessEngineRef.current.preloadNextTrack({
-      url: nextTrack.audioUrl,
+      url,
       id: nextTrack.id,
     });
   }, []);
 
   const logTrackPlayback = (track: Track) => {
+    const safeUrl = getPlayableUrl(track);
     addRecentlyPlayedTrack({
       trackId: track.id,
       trackTitle: track.title || track.name || 'Untitled',
       artistName: track.artist,
       coverArt: track.coverImage || track.coverArt || '',
-      audioUrl: track.audioUrl || '',
+      audioUrl: safeUrl,
       playedAt: Date.now(),
+      album: track.album,
+      quality: track.quality,
+      codecLabel: track.codecLabel,
+      bitDepth: track.bitDepth,
+      sampleRate: track.sampleRate,
+      bitrateKbps: track.bitrateKbps,
+      durationSeconds: typeof track.duration === 'number' ? track.duration : undefined,
     }).catch(err => console.error('Failed to track recently played:', err));
   };
 
@@ -228,7 +300,16 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
   // Load track when it changes
   useEffect(() => {
     const engine = gaplessEngineRef.current;
-    if (!currentTrack || !engine) return;
+    if (!currentTrack) return;
+
+    // Reset HTML fallback state on new track
+    setUsingHtmlAudio(false);
+    if (htmlAudioRef.current) {
+      htmlAudioRef.current.pause();
+      htmlAudioRef.current.src = '';
+    }
+
+    if (!engine) return;
 
     if (engineDrivenTrackRef.current === currentTrack.id) {
       engineDrivenTrackRef.current = null;
@@ -236,12 +317,15 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
       return;
     }
 
-    if (!currentTrack.audioUrl) {
-      console.warn('No audioUrl for current track');
+    const playUrl = getPlayableUrl(currentTrack);
+    const shouldAutoPlay = desiredPlayStateRef.current;
+
+    // Large/long tracks stream directly via HTMLAudio to avoid huge decode stalls
+    if (shouldStreamWithHtml(currentTrack)) {
+      engine.pause();
+      startHtmlAudio(playUrl, currentTrack, shouldAutoPlay);
       return;
     }
-
-    const shouldAutoPlay = desiredPlayStateRef.current;
 
     if (engine.usePreloadedTrack(currentTrack.id, shouldAutoPlay)) {
       console.log('Used preloaded buffer for track:', currentTrack.id);
@@ -264,47 +348,92 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
 
     const requestId = ++loadRequestIdRef.current;
     isLoadingTrackRef.current = true;
-    console.log('Loading new track:', currentTrack.title, 'requestId:', requestId);
+    console.log('Loading new track:', currentTrack.title || currentTrack.name, 'requestId:', requestId, 'url:', playUrl);
 
     // Stop whatever is currently playing so skips don't leave overlapping audio
     engine.pause();
 
-    logTrackPlayback(currentTrack);
+    const tryLoad = async (url: string, allowFallback: boolean) => {
+      try {
+        logTrackPlayback(currentTrack);
+        await engine.loadTrack({ url, id: currentTrack.id });
+        if (loadRequestIdRef.current !== requestId) {
+          return;
+        }
+        isLoadingTrackRef.current = false;
+        console.log('Track loaded successfully, starting playback');
+        engine.seek(0);
+        if (desiredPlayStateRef.current) {
+          engine.play();
+        } else {
+          engine.pause();
+        }
+        preloadNextForTrack(currentTrack.id);
+      } catch (err) {
+        if (loadRequestIdRef.current !== requestId) {
+          return;
+        }
+        console.error('Failed to load track URL, allowFallback=', allowFallback, 'err=', err);
+        if (allowFallback && url !== FALLBACK_AUDIO_URL) {
+          console.warn('Retrying with fallback audio URL');
+          await tryLoad(FALLBACK_AUDIO_URL, false);
+          return;
+        }
+        // Gapless failed; fall back to HTMLAudioElement so playback still works
+        isLoadingTrackRef.current = false;
+        const htmlAudio = htmlAudioRef.current ?? (htmlAudioRef.current = new Audio());
+        setUsingHtmlAudio(true);
+        htmlAudio.src = url;
+        htmlAudio.currentTime = 0;
+        htmlAudio.muted = false;
+        htmlAudio.volume = volume;
+        htmlAudio.onended = () => handleNextRef.current?.('auto');
+        htmlAudio.ontimeupdate = () => {
+          setCurrentTime(htmlAudio.currentTime);
+          setDuration(htmlAudio.duration || duration);
+        };
+        htmlAudio.onloadedmetadata = () => {
+          setDuration(htmlAudio.duration || duration);
+        };
+        if (desiredPlayStateRef.current) {
+          htmlAudio.play().then(() => {
+            setIsPlaying(true);
+            onPlayPauseRef.current?.(true);
+          }).catch((playErr) => {
+            console.error('HTML audio play failed after gapless fallback:', playErr);
+            desiredPlayStateRef.current = false;
+            setIsPlaying(false);
+            onPlayPauseRef.current?.(false);
+          });
+        } else {
+          setIsPlaying(false);
+          onPlayPauseRef.current?.(false);
+        }
+      }
+    };
 
-    engine.loadTrack({
-      url: currentTrack.audioUrl,
-      id: currentTrack.id
-    }).then(() => {
-      if (loadRequestIdRef.current !== requestId) {
-        return;
-      }
-      isLoadingTrackRef.current = false;
-      console.log('Track loaded successfully, starting playback');
-      engine.seek(0);
-      if (desiredPlayStateRef.current) {
-        engine.play();
-      } else {
-        engine.pause();
-      }
-      preloadNextForTrack(currentTrack.id);
-    }).catch(err => {
-      if (loadRequestIdRef.current !== requestId) {
-        return;
-      }
-      isLoadingTrackRef.current = false;
-      console.error('Failed to load track:', err);
-      desiredPlayStateRef.current = false;
-      setIsPlaying(false);
-      onPlayPauseRef.current?.(false);
-    });
-  }, [currentTrack, preloadNextForTrack]);
+    tryLoad(playUrl, true);
+  }, [currentTrack, getPlayableUrl, preloadNextForTrack]);
 
   const togglePlayPause = useCallback(() => {
     const engine = gaplessEngineRef.current;
-    if (!engine) return;
+    const htmlAudio = htmlAudioRef.current;
 
     const nextDesired = !desiredPlayStateRef.current;
     desiredPlayStateRef.current = nextDesired;
+
+    if (usingHtmlAudio && htmlAudio) {
+      if (nextDesired) {
+        htmlAudio.play().catch(err => console.error('HTML audio play failed:', err));
+      } else {
+        htmlAudio.pause();
+      }
+      setIsPlaying(nextDesired);
+      onPlayPauseRef.current?.(nextDesired);
+      return;
+    }
+
+    if (!engine) return;
 
     if (isLoadingTrackRef.current) {
       return;
@@ -315,7 +444,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     } else {
       engine.pause();
     }
-  }, []);
+  }, [usingHtmlAudio]);
 
   const setExternalVolume = useCallback((value: number) => {
     const engine = gaplessEngineRef.current;
@@ -323,6 +452,10 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     const clamped = Math.max(0, Math.min(1, value));
     engine.setVolume(clamped);
     engine.setMuted(clamped === 0);
+    if (htmlAudioRef.current) {
+      htmlAudioRef.current.volume = clamped;
+      htmlAudioRef.current.muted = clamped === 0;
+    }
   }, []);
 
   const setExternalEq = useCallback((bands: { bass: number; mid: number; treble: number }) => {
@@ -449,26 +582,70 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     onTrackChangeRef.current?.(tracks[prevIndex]);
   }, [isShuffle]);
 
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!gaplessEngineRef.current) return;
+  const commitSeek = useCallback((targetTime: number) => {
+    const hasDuration = Number.isFinite(duration) && duration > 0;
+    const clampedTime = hasDuration
+      ? Math.max(0, Math.min(targetTime, duration))
+      : Math.max(0, targetTime);
+
     wallInvalidateRef.current?.('seek');
-    
+
+    if (usingHtmlAudio && htmlAudioRef.current) {
+      htmlAudioRef.current.currentTime = clampedTime;
+      setCurrentTime(clampedTime);
+      return;
+    }
+
+    if (!gaplessEngineRef.current) return;
+    gaplessEngineRef.current.seek(clampedTime);
+  }, [duration, usingHtmlAudio]);
+
+  const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newTime = parseFloat(e.target.value);
-    gaplessEngineRef.current.seek(newTime);
+    setScrubTime(newTime);
+
+    // Keyboard-driven changes (no pointer down) should seek immediately
+    if (!isScrubbing) {
+      commitSeek(newTime);
+    }
+  };
+
+  const handleSeekStart = () => {
+    setIsScrubbing(true);
+  };
+
+  const handleSeekEnd = () => {
+    if (scrubTime !== null) {
+      commitSeek(scrubTime);
+    }
+    setIsScrubbing(false);
+    setScrubTime(null);
   };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!gaplessEngineRef.current) return;
-    
     const newVolume = parseFloat(e.target.value);
+    if (usingHtmlAudio && htmlAudioRef.current) {
+      htmlAudioRef.current.volume = newVolume;
+      htmlAudioRef.current.muted = newVolume === 0;
+      setVolume(newVolume);
+      setIsMuted(newVolume === 0);
+      return;
+    }
+
+    if (!gaplessEngineRef.current) return;
     gaplessEngineRef.current.setVolume(newVolume);
     gaplessEngineRef.current.setMuted(newVolume === 0);
   };
 
   const toggleMute = () => {
-    if (!gaplessEngineRef.current) return;
-    
     const newMuted = !isMuted;
+    if (usingHtmlAudio && htmlAudioRef.current) {
+      htmlAudioRef.current.muted = newMuted;
+      setIsMuted(newMuted);
+      return;
+    }
+
+    if (!gaplessEngineRef.current) return;
     gaplessEngineRef.current.setMuted(newMuted);
   };
 
@@ -482,6 +659,8 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
+
+  const seekDisplayTime = (isScrubbing && scrubTime !== null) ? scrubTime : currentTime;
 
   // Expose controls to parent
   useEffect(() => {
@@ -501,6 +680,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
         setEqBands: setExternalEq,
         invalidateWallSession: wallTracker.invalidateSession,
         wallSessionCount: wallTracker.consecutiveTracks,
+        usingHtmlAudio,
       });
     }
   }, [
@@ -517,7 +697,32 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     setExternalEq,
     wallTracker.consecutiveTracks,
     wallTracker.invalidateSession,
+    usingHtmlAudio,
   ]);
+
+  // Fallback polling to keep time/duration fresh even if callbacks hiccup
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const engine = gaplessEngineRef.current;
+      if (usingHtmlAudio && htmlAudioRef.current) {
+        setCurrentTime(htmlAudioRef.current.currentTime);
+        if (Number.isFinite(htmlAudioRef.current.duration) && htmlAudioRef.current.duration > 0) {
+          setDuration(htmlAudioRef.current.duration);
+        }
+        return;
+      }
+
+      if (!engine) return;
+      const nextTime = engine.getCurrentTime();
+      const nextDuration = engine.getDuration();
+      setCurrentTime((prev) => (Number.isFinite(nextTime) ? nextTime : prev));
+      if (Number.isFinite(nextDuration) && nextDuration > 0) {
+        setDuration(nextDuration);
+      }
+    }, 250);
+
+    return () => clearInterval(interval);
+  }, [usingHtmlAudio]);
 
   // Render empty-state UI when no track
 
@@ -745,19 +950,22 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
                 {/* Progress Bar */}
                 <div className="flex items-center gap-2 w-full" style={{ maxWidth: '500px' }}>
                   <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem', minWidth: '40px' }}>
-                    {formatTime(currentTime)}
+                    {formatTime(seekDisplayTime)}
                   </span>
                   <input
                     type="range"
                     min="0"
                     max={duration || 0}
-                    value={currentTime}
-                    onChange={handleSeek}
+                    value={seekDisplayTime}
+                    onChange={handleSeekChange}
+                    onPointerDown={handleSeekStart}
+                    onPointerUp={handleSeekEnd}
+                    onPointerCancel={handleSeekEnd}
                     className="flex-1"
                     style={{
                       height: '4px',
                       borderRadius: '2px',
-                      background: `linear-gradient(to right, #d32f2f ${duration > 0 ? (currentTime / duration) * 100 : 0}%, #333333 ${duration > 0 ? (currentTime / duration) * 100 : 0}%)`,
+                      background: `linear-gradient(to right, #d32f2f ${duration > 0 ? (seekDisplayTime / duration) * 100 : 0}%, #333333 ${duration > 0 ? (seekDisplayTime / duration) * 100 : 0}%)`,
                       appearance: 'none',
                       cursor: 'pointer',
                     }}

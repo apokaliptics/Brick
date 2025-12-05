@@ -1,6 +1,7 @@
 import { X, Download, Heart, Zap } from 'lucide-react';
 // @ts-ignore
 import { useState, useEffect } from 'react';
+import { openBrickDB } from '../../utils/db';
 
 interface UserSettings {
   monthlySupport: boolean;
@@ -32,7 +33,7 @@ export function UserSettingsModal({ isOpen, onClose, userName = 'User', userAvat
     try {
       // Get data from IndexedDB
       const db = await openPlaylistDB();
-      const tx = db.transaction(['playlists', 'localTracks', 'recentlyPlayed'], 'readonly');
+      const tx = db.transaction(['playlists'], 'readonly');
       
       const playlists = await new Promise<any[]>((resolve) => {
         const request = tx.objectStore('playlists').getAll();
@@ -193,19 +194,4 @@ export function UserSettingsModal({ isOpen, onClose, userName = 'User', userAvat
   );
 }
 
-const openPlaylistDB = (): Promise<IDBDatabase> => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('BrickMusicDB', 2);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains('localTracks')) {
-        db.createObjectStore('localTracks', { keyPath: 'id' });
-      }
-      if (!db.objectStoreNames.contains('playlists')) {
-        db.createObjectStore('playlists', { keyPath: 'id' });
-      }
-    };
-  });
-};
+const openPlaylistDB = (): Promise<IDBDatabase> => openBrickDB();

@@ -36,6 +36,8 @@ export function HomeScreenV2({
   const [recentTracks, setRecentTracks] = useState<RecentlyPlayedTrack[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(true);
 
+  const getTrackQuality = (track: RecentlyPlayedTrack) => track.codecLabel || track.quality || 'MP3';
+
   // Use external filter state if provided, otherwise use internal state
   const activeFilter = externalActiveFilter !== undefined ? externalActiveFilter : internalActiveFilter;
   const onFilterChange = externalOnFilterChange || setInternalActiveFilter;
@@ -389,8 +391,13 @@ export function HomeScreenV2({
                           artist: track.artistName,
                           coverArt: track.coverArt,
                           url: track.audioUrl,
-                          duration: '0:00', // Will be updated by player
-                          format: 'MP3',
+                          album: track.album,
+                          duration: track.durationSeconds ?? '0:00',
+                          format: getTrackQuality(track),
+                          bitDepth: track.bitDepth,
+                          sampleRate: track.sampleRate,
+                          bitrateKbps: track.bitrateKbps,
+                          codecLabel: track.codecLabel,
                         });
                       }
                     }}
@@ -416,6 +423,9 @@ export function HomeScreenV2({
                         style={{ color: '#a0a0a0', fontSize: '0.875rem' }}
                       >
                         {track.artistName}
+                      </p>
+                      <p className="truncate" style={{ color: '#777777', fontSize: '0.8rem' }}>
+                        {(track.album || 'Unknown Album')} • {getTrackQuality(track)}
                       </p>
                     </div>
 
@@ -613,8 +623,13 @@ export function HomeScreenV2({
                           artist: track.artistName,
                           coverArt: track.coverArt,
                           url: track.audioUrl,
-                          duration: '0:00', // Will be updated by player
-                          format: 'MP3',
+                          album: track.album,
+                          duration: track.durationSeconds ?? '0:00',
+                          format: getTrackQuality(track),
+                          bitDepth: track.bitDepth,
+                          sampleRate: track.sampleRate,
+                          bitrateKbps: track.bitrateKbps,
+                          codecLabel: track.codecLabel,
                         });
                       }
                     }}
@@ -640,6 +655,9 @@ export function HomeScreenV2({
                         style={{ color: '#a0a0a0', fontSize: '0.875rem' }}
                       >
                         {track.artistName}
+                      </p>
+                      <p className="truncate" style={{ color: '#777777', fontSize: '0.8rem' }}>
+                        {(track.album || 'Unknown Album')} • {getTrackQuality(track)}
                       </p>
                     </div>
 

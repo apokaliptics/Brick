@@ -14,6 +14,7 @@ import { ConnectionManagementScreen } from './components/screens/ConnectionManag
 import { ArtistProfileScreenV2 } from './components/screens/ArtistProfileScreenV2';
 import { MusicPlayer } from './components/MusicPlayer';
 import { WallOverlay } from './components/WallOverlay';
+import { WallDebugPanel } from './components/WallDebugPanel';
 import { LocalMusicUploader } from './components/LocalMusicUploader';
 import { PlayerApple } from './components/PlayerApple';
 import { Navigation } from './components/Navigation';
@@ -29,12 +30,19 @@ import { mockPlaylists, mockTracks, mockCurrentUser, mockArtists, mockConnection
 import type { Track, Playlist, Screen, User } from './types';
 import { addRecentlyPlayedPlaylist } from './utils/recentlyPlayedPlaylists';
 import { addRecentlyPlayedTrack } from './utils/recentlyPlayed';
+import { openBrickDB } from './utils/db';
 import './styles/globals.css';
 import pinkStyles from './styles/pinkTier.module.css';
 
 export default function App() {
   const { colors } = useTheme();
-  const { wallState, pinkTierUnlocked } = useWall();
+  const {
+    wallState,
+    pinkTierUnlocked,
+    pinkUnlockTimestamp,
+    themeEnabled,
+    setThemeEnabled,
+  } = useWall();
   const wallShellClass = `app-shell brick-shell wall-state-${wallState.toLowerCase()}`;
 
   // Helper function to format duration
@@ -59,6 +67,15 @@ export default function App() {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const formatTierDisplay = (tierValue: string): string => {
+    return tierValue
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ')
+      || 'Foundation';
   };
 
   // Auth states
@@ -108,10 +125,26 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (!pinkTierUnlocked && isPink) {
-      setIsPink(false);
+    if (!pinkTierUnlocked) {
+      if (isPink) {
+        setIsPink(false);
+      }
+      if (themeEnabled) {
+        setThemeEnabled(false);
+      }
+      return;
     }
-  }, [pinkTierUnlocked, isPink]);
+
+    if (themeEnabled !== isPink) {
+      setIsPink(themeEnabled);
+    }
+  }, [isPink, pinkTierUnlocked, themeEnabled, setThemeEnabled]);
+
+  const handlePinkThemeToggle = (value: boolean) => {
+    if (!pinkTierUnlocked) return;
+    setIsPink(value);
+    setThemeEnabled(value);
+  };
 
   const notifyWallSessionReset = (reason: string) => {
     musicPlayerControls?.invalidateWallSession?.(reason);
@@ -339,6 +372,13 @@ export default function App() {
       coverArt: localTrack.coverArt || 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=300',
       audioUrl: localTrack.url,
       playedAt: Date.now(),
+      album: localTrack.album,
+      quality: localTrack.format,
+      codecLabel: localTrack.codecLabel,
+      bitDepth: localTrack.bitDepth,
+      sampleRate: localTrack.sampleRate,
+      bitrateKbps: localTrack.bitrateKbps,
+      durationSeconds: typeof localTrack.duration === 'number' ? localTrack.duration : undefined,
     }).catch(err => console.error('Failed to track recently played track:', err));
 
     // Convert local track to player format with actual metadata
@@ -690,8 +730,10 @@ export default function App() {
   const selectedConnection = mockConnections.find(c => c.user.id === selectedUserId);
 
   const operatorName = currentUser?.name || 'Guest';
-  const baseTierLabel = (currentUser?.tier || 'Foundation').toUpperCase();
-  const tierLabel = isPink ? 'PINK ARCHITECT' : baseTierLabel;
+  const rawTierValue = (currentUser?.tier || 'Foundation').trim();
+  const displayTierBase = formatTierDisplay(rawTierValue);
+  const pinkTierLabel = `Pink ${displayTierBase}`;
+  const tierLabel = isPink ? pinkTierLabel : displayTierBase.toUpperCase();
   const pageLabelMap: Record<Screen, string> = {
     home: 'HOME GRID',
     radar: 'RADAR SCAN',
@@ -733,6 +775,7 @@ export default function App() {
   return (
     <div className={wallShellClass} style={{ backgroundColor: colors.bg.primary }}>
       <WallOverlay enabled={isPink} />
+      <WallDebugPanel isPinkEnabled={isPink} onPinkOverride={handlePinkThemeToggle} />
       {/* Main Content - Centered between fixed sidebars */}
       <div className="flex-1 overflow-x-hidden pb-32 app-main-rails">
         {/* Unified center column for all screens */}
@@ -740,12 +783,15 @@ export default function App() {
           {/* Ultra-thin command bar */}
           <div className="sticky top-0 z-20 mb-4 px-3">
             <div
-              className="flex flex-wrap items-center justify-center rounded-[4px] border px-5 py-2 command-bar"
+              className="flex flex-wrap items-center justify-center rounded-[4px] border px-6 py-2 command-bar"
               style={{
                 background: 'linear-gradient(135deg, rgba(18,18,18,0.92), rgba(28,18,18,0.85))',
                 borderColor: 'rgba(211,47,47,0.25)',
                 backdropFilter: 'blur(18px)',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.45), 0 0 30px rgba(161,24,24,0.35)'
+                boxShadow: '0 8px 24px rgba(0,0,0,0.45), 0 0 30px rgba(161,24,24,0.35)',
+                width: 'calc(100% + 40px)',
+                marginLeft: '-20px',
+                marginRight: '-20px'
               }}
             >
               {topBarItems.map((item, idx) => (
@@ -795,7 +841,7 @@ export default function App() {
               onCreatePlaylist={() => setShowPlaylistCreation(true)}
               currentUser={currentUser}
               isPinkMode={isPink}
-              onPinkToggle={(value) => setIsPink(value)}
+                onPinkToggle={handlePinkThemeToggle}
               pinkTierUnlocked={pinkTierUnlocked}
             />
             
@@ -1157,6 +1203,9 @@ export default function App() {
         onFilterChange={activeTab === 'home' ? handleFilterChange : undefined}
         onSettingsClick={() => setShowUserSettings(true)}
         isPinkMode={isPink}
+        pinkTierLabel={pinkTierLabel}
+        pinkTierUnlocked={pinkTierUnlocked}
+        pinkUnlockTimestamp={pinkUnlockTimestamp}
       />
 
       {/* Player Overlay */}
@@ -1295,25 +1344,4 @@ export default function App() {
   );
 }
 
-const openPlaylistDB = (): Promise<IDBDatabase> => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('BrickMusicDB', 4);
-    
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-    
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      
-      // Create localTracks store if it doesn't exist
-      if (!db.objectStoreNames.contains('localTracks')) {
-        db.createObjectStore('localTracks', { keyPath: 'id' });
-      }
-      
-      // Create playlists store if it doesn't exist
-      if (!db.objectStoreNames.contains('playlists')) {
-        db.createObjectStore('playlists', { keyPath: 'id' });
-      }
-    };
-  });
-};
+const openPlaylistDB = (): Promise<IDBDatabase> => openBrickDB();

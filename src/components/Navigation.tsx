@@ -1,6 +1,7 @@
 import { Home, Target, Grid, Lock, Menu, X, Moon, Sun, Settings, Bell } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import { useWall } from '../contexts/WallContext';
 import type { Screen } from '../types';
 import pinkStyles from '../styles/pinkTier.module.css';
 
@@ -12,6 +13,7 @@ interface NavNotification {
   message: string;
   timestamp: number;
   unread?: boolean;
+  system?: boolean;
 }
 
 interface NavigationProps {
@@ -24,6 +26,9 @@ interface NavigationProps {
   notifications?: NavNotification[];
   onNotificationsViewed?: () => void;
   onNotificationDismiss?: (id: string) => void;
+  pinkTierLabel?: string;
+  pinkTierUnlocked?: boolean;
+  pinkUnlockTimestamp?: number | null;
 }
 
 export function Navigation({
@@ -36,11 +41,38 @@ export function Navigation({
   notifications,
   onNotificationsViewed,
   onNotificationDismiss,
+  pinkTierLabel,
+  pinkTierUnlocked,
+  pinkUnlockTimestamp,
 }: NavigationProps) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const { theme, toggleTheme, colors } = useTheme();
-  const notificationList = notifications ?? [];
+  const { pinkTierUnlocked: contextPinkUnlocked } = useWall();
+  const baseNotifications = notifications ?? [];
+  const pinkBadgeNotification = useMemo<NavNotification | null>(() => {
+    const unlocked = pinkTierUnlocked ?? contextPinkUnlocked;
+    if (!unlocked) return null;
+    return {
+      id: 'pink-tier-alert',
+      title: 'Pink Badge Activated',
+      message: pinkTierLabel ? `You've received the ${pinkTierLabel} badge.` : "You've received the Pink badge.",
+      timestamp: pinkUnlockTimestamp ?? Date.now(),
+      unread: false,
+      system: true,
+    };
+  }, [contextPinkUnlocked, pinkTierLabel, pinkTierUnlocked, pinkUnlockTimestamp]);
+
+  const notificationList = useMemo(() => {
+    if (!pinkBadgeNotification) {
+      return baseNotifications;
+    }
+    const exists = baseNotifications.some((note) => note.id === pinkBadgeNotification.id);
+    if (exists) {
+      return baseNotifications;
+    }
+    return [pinkBadgeNotification, ...baseNotifications];
+  }, [baseNotifications, pinkBadgeNotification]);
   const unreadCount = notificationList.filter((note) => note.unread).length;
 
   const handleNotificationToggle = () => {
@@ -96,15 +128,42 @@ export function Navigation({
             <div className="relative">
               <button
                 onClick={handleNotificationToggle}
-                className="flex items-center justify-center rounded-full transition-colors relative"
-                style={{ width: '36px', height: '36px', border: '1px solid rgba(255,255,255,0.08)', backgroundColor: 'rgba(0,0,0,0.2)' }}
+                className={`flex items-center justify-center rounded-full transition-all duration-300 relative overflow-hidden group ${
+                  unreadCount > 0 ? 'animate-pulse' : ''
+                }`}
+                style={{
+                  width: '36px',
+                  height: '36px',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  background: unreadCount > 0
+                    ? 'linear-gradient(135deg, rgba(211,47,47,0.15), rgba(198,166,0,0.1), rgba(84,110,122,0.1))'
+                    : 'linear-gradient(135deg, rgba(30,30,30,0.8), rgba(20,20,20,0.9))',
+                  boxShadow: unreadCount > 0
+                    ? '0 0 20px rgba(211,47,47,0.3), inset 0 1px 0 rgba(255,255,255,0.1)'
+                    : 'inset 0 1px 0 rgba(255,255,255,0.08), 0 2px 8px rgba(0,0,0,0.3)',
+                  backdropFilter: 'blur(10px)',
+                }}
                 title="Notifications"
               >
-                <Bell size={16} color={colors.text.primary} strokeWidth={2} />
+                <div className="absolute inset-0 bg-gradient-to-br from-transparent via-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                <Bell
+                  size={16}
+                  color={unreadCount > 0 ? '#ff6b6b' : colors.text.primary}
+                  strokeWidth={unreadCount > 0 ? 2.5 : 2}
+                  className="relative z-10 transition-all duration-300"
+                />
                 {unreadCount > 0 && (
                   <span
-                    className="absolute -top-1 -right-1 flex items-center justify-center rounded-full text-[0.55rem] font-semibold"
-                    style={{ width: '16px', height: '16px', backgroundColor: '#ff00cc', color: '#0c0c0c' }}
+                    className="absolute -top-1 -right-1 flex items-center justify-center rounded-full text-[0.55rem] font-bold animate-bounce"
+                    style={{
+                      width: '18px',
+                      height: '18px',
+                      background: 'linear-gradient(135deg, #ff00cc, #ff6b6b)',
+                      color: '#ffffff',
+                      boxShadow: '0 0 12px rgba(255,0,204,0.6), 0 2px 4px rgba(0,0,0,0.3)',
+                      border: '1px solid rgba(255,255,255,0.2)',
+                      animation: 'pulse 2s infinite',
+                    }}
                   >
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
@@ -112,48 +171,87 @@ export function Navigation({
               </button>
               {notificationsOpen && (
                 <div
-                  className="absolute right-0 mt-2 w-72 rounded-2xl shadow-2xl border border-white/10"
-                  style={{ backgroundColor: 'rgba(10, 10, 10, 0.95)', backdropFilter: 'blur(14px)', zIndex: 60 }}
+                  className="absolute mt-3 rounded-xl shadow-2xl border"
+                  style={{
+                    width: '380px',
+                    maxHeight: '280px',
+                    right: '-200px',
+                    backgroundColor: 'rgba(18, 18, 18, 0.96)',
+                    backdropFilter: 'blur(20px)',
+                    borderColor: 'rgba(198, 167, 0, 0.15)',
+                    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(198, 167, 0, 0.08), inset 0 -1px 0 rgba(0, 0, 0, 0.3)',
+                    zIndex: 60,
+                  }}
                 >
-                  <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
-                    <p className="mono text-[0.65rem] tracking-[0.3em] text-white/70">ALERTS</p>
+                  <div
+                    className="px-4 py-2 border-b flex items-center justify-between"
+                    style={{
+                      borderColor: 'rgba(198, 167, 0, 0.1)',
+                      background: 'linear-gradient(180deg, rgba(198, 167, 0, 0.04), rgba(198, 167, 0, 0.01))',
+                    }}
+                  >
+                    <p className="mono text-[0.65rem] tracking-[0.3em] font-medium" style={{ color: 'rgba(198, 167, 0, 0.8)' }}>
+                      ALERTS
+                    </p>
                     <button
                       onClick={() => setNotificationsOpen(false)}
-                      className="rounded-full p-1 hover:bg-white/5 transition-colors"
+                      className="rounded-full p-1 hover:bg-white/5 transition-all duration-200"
                       aria-label="Close notifications"
+                      style={{ color: 'rgba(255,255,255,0.5)' }}
                     >
-                      <X size={14} strokeWidth={2} color="rgba(255,255,255,0.6)" />
+                      <X size={14} strokeWidth={2} />
                     </button>
                   </div>
-                  <div className="max-h-72 overflow-y-auto divide-y divide-white/5">
+                  <div className="overflow-y-auto" style={{ maxHeight: '232px' }}>
                     {notificationList.length === 0 && (
-                      <div className="px-4 py-5 text-sm text-white/60">You're all caught up.</div>
+                      <div className="px-4 py-6 text-xs text-center" style={{ color: 'rgba(255,255,255,0.5)' }}>
+                        You're all caught up.
+                      </div>
                     )}
-                    {notificationList.map((note) => (
-                      <div key={note.id} className="px-4 py-3 flex flex-col gap-1">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold" style={{ color: '#ffffff' }}>
+                    {notificationList.map((note, idx) => {
+                      const isSystemNotification = Boolean(note.system);
+                      const isLast = idx === notificationList.length - 1;
+                      return (
+                        <div
+                          key={note.id}
+                          className={`px-4 py-2 flex items-center gap-2 transition-colors duration-200 hover:bg-white/2 ${!isLast ? 'border-b' : ''}`}
+                          style={{
+                            borderColor: 'rgba(255, 255, 255, 0.03)',
+                            background: note.unread ? 'rgba(198, 167, 0, 0.02)' : 'transparent',
+                          }}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p
+                              className="text-xs font-semibold truncate"
+                              style={{
+                                color: isSystemNotification ? 'rgba(198, 167, 0, 0.95)' : '#e0e0e0',
+                                letterSpacing: '-0.01em',
+                              }}
+                            >
                               {note.title}
                             </p>
-                            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.7)' }}>
+                            <p className="text-[0.7rem] truncate" style={{ color: 'rgba(255,255,255,0.55)' }}>
                               {note.message}
                             </p>
                           </div>
-                          <button
-                            onClick={() => onNotificationDismiss?.(note.id)}
-                            className="p-1 rounded-full hover:bg-white/5 transition-colors"
-                            aria-label="Dismiss notification"
-                          >
-                            <X size={12} strokeWidth={2} color="rgba(255,255,255,0.4)" />
-                          </button>
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <span className="text-[0.6rem]" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                              {formatNotificationTime(note.timestamp)}
+                            </span>
+                            {!isSystemNotification && (
+                              <button
+                                onClick={() => onNotificationDismiss?.(note.id)}
+                                className="p-0.5 rounded hover:bg-white/10 transition-colors"
+                                aria-label="Dismiss notification"
+                                style={{ color: 'rgba(255,255,255,0.4)' }}
+                              >
+                                <X size={12} strokeWidth={2} />
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        <div className="flex items-center justify-between text-[0.65rem] uppercase tracking-widest" style={{ color: 'rgba(255,255,255,0.4)' }}>
-                          <span>{formatNotificationTime(note.timestamp)}</span>
-                          {note.unread && <span style={{ color: '#ff00cc' }}>NEW</span>}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

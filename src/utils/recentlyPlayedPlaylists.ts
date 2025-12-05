@@ -1,3 +1,5 @@
+import { openBrickDB, DB_VERSION } from './db';
+
 // Recently Played Playlists Management
 export interface RecentlyPlayedPlaylist {
   playlistId: string;
@@ -13,34 +15,11 @@ export interface RecentlyPlayedPlaylist {
 }
 
 
-const DB_NAME = 'BrickMusicDB';
 const STORE_NAME = 'recentlyPlayedPlaylists';
 
 export async function openRecentlyPlayedPlaylistsDB(): Promise<IDBDatabase> {
-  console.log('Opening recently played playlists DB, version 4');
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 4); // Increased version to force upgrade
-
-    request.onerror = () => {
-      console.error('Failed to open recently played playlists DB:', request.error);
-      reject(request.error);
-    };
-    request.onsuccess = () => {
-      console.log('Successfully opened recently played playlists DB');
-      resolve(request.result);
-    };
-
-    request.onupgradeneeded = (event) => {
-      console.log('Upgrading recently played playlists DB');
-      const db = (event.target as IDBOpenDBRequest).result;
-
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        console.log('Creating recentlyPlayedPlaylists object store');
-        const store = db.createObjectStore(STORE_NAME, { keyPath: 'playlistId' });
-        store.createIndex('playedAt', 'playedAt', { unique: false });
-      }
-    };
-  });
+  console.log(`Opening recently played playlists DB, version ${DB_VERSION}`);
+  return openBrickDB();
 }
 
 

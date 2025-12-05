@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { JSX } from 'react';
-import { Play, Pause, SkipBack, SkipForward, X, Repeat, Sliders, Volume2, ChevronDown } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, X, Repeat, Sliders } from 'lucide-react';
 import type { Track } from '../types';
 import { formatBitrate } from '../utils/audioMetaHelpers';
 import { useTrackAudioMeta } from '../hooks/useTrackAudioMeta';
@@ -108,7 +108,7 @@ export function PlayerApple({
   const [activeView, setActiveView] = useState<PlayerView>('cover');
   const [localIsPlaying, setLocalIsPlaying] = useState(isPlaying);
   const audioMeta = useTrackAudioMeta(track);
-  const [artistInfo, setArtistInfo] = useState<LastFmArtistInfo | null>(null);
+  const [artistInfos, setArtistInfos] = useState<LastFmArtistInfo[]>([]);
   const [albumInfo, setAlbumInfo] = useState<LastFmAlbumInfo | null>(null);
   const [isLoadingBio, setIsLoadingBio] = useState(false);
   const [isLoadingAlbum, setIsLoadingAlbum] = useState(false);
@@ -144,11 +144,12 @@ export function PlayerApple({
 
   useEffect(() => {
     const fetchArtistData = async () => {
-      if (!track.artist) return;
+      const artists = lastFmService.splitArtists(track.artist || '') || [];
+      if (artists.length === 0) return;
       setIsLoadingBio(true);
       try {
-        const info = await lastFmService.getArtistInfo(track.artist);
-        setArtistInfo(info);
+        const infos = await Promise.all(artists.map((name) => lastFmService.getArtistInfo(name)));
+        setArtistInfos(infos.filter((info): info is LastFmArtistInfo => Boolean(info)));
       } catch (e) {
         console.error('Failed to fetch artist info:', e);
       } finally {
@@ -164,15 +165,8 @@ export function PlayerApple({
       }
       setIsLoadingAlbum(true);
       try {
-        let info: LastFmAlbumInfo | null = null;
-        try {
-          // Use loose resolver for remasters/variants
-          info = await lastFmService.getAlbumInfoLoose(track.artist, albumTitle, track.title);
-        } catch (error) {
-          console.error('Failed to fetch album info:', error);
-        }
-
-        if (info?.summary) {
+        const info = await lastFmService.getAlbumInfoLoose(track.artist, albumTitle, track.title);
+        if (info) {
           setAlbumInfo(info);
           return;
         }
@@ -180,16 +174,15 @@ export function PlayerApple({
         const wikiFallback = await fetchWikipediaAlbumSummary(track.artist, albumTitle);
         if (wikiFallback) {
           setAlbumInfo({
-            title: info?.title || wikiFallback.title || albumTitle,
-            artist: info?.artist || track.artist,
+            title: wikiFallback.title || albumTitle,
+            artist: track.artist,
             summary: wikiFallback.summary,
-            image: info?.image || wikiFallback.image,
-            tracks: info?.tracks,
+            image: wikiFallback.image,
           });
           return;
         }
 
-        setAlbumInfo(info);
+        setAlbumInfo(null);
       } finally {
         setIsLoadingAlbum(false);
       }
@@ -269,7 +262,12 @@ Melodies beyond compare`;
         <div style={{ position: 'relative', padding: '16px', display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '24px', flex: '0 0 auto' }}>
           {/* Volume on left */}
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '10px' }}>
-            <Volume2 size={16} color="#bbb" />
+            {/* Speaker icon left, percent on right */}
+            <span aria-hidden style={{ display: 'inline-flex', alignItems: 'center' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M4 9v6h4l5 4V5L8 9H4z" fill="#bbb"/>
+              </svg>
+            </span>
             <input
               type="range"
               min={0}
@@ -319,12 +317,14 @@ Melodies beyond compare`;
             </button>
           </div>
 
-          <div style={{ position: 'absolute', right: 12, top: 12, display: 'flex', gap: '8px' }}>
-            <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }} title="Minimize">
-              <ChevronDown size={20} color="#e0e0e0" />
-            </button>
+          <div style={{ position: 'absolute', right: 16, top: 16, display: 'flex', gap: '8px' }}>
             <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }} title="Close">
               <X size={20} color="#e0e0e0" />
+            </button>
+            <button onClick={() => goToView('album')} style={{ background: 'none', border: 'none', cursor: 'pointer' }} title="Minimize">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M5 12h14" stroke="#e0e0e0" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
             </button>
           </div>
         </div>
@@ -424,9 +424,9 @@ Melodies beyond compare`;
                 <div>
                   {/* Artist image */}
                   <div style={{ width: '160px', height: '160px', borderRadius: '50%', overflow: 'hidden', marginBottom: '1rem', boxShadow: '0 16px 32px rgba(0,0,0,0.3)' }}>
-                    <img src={artistInfo?.image || 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400'} alt={(track as any).artist} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <img src={artistInfos[0]?.image || 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400'} alt={(track as any).artist} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   </div>
-                  <h3 style={{ fontWeight: 500, color: '#e0e0e0', marginBottom: '0.75rem', letterSpacing: '-0.02em', fontFamily: "'Syne', 'Inter', sans-serif" }}>{(track as any).artist}</h3>
+                  <h3 style={{ fontWeight: 500, color: '#e0e0e0', marginBottom: '0.75rem', letterSpacing: '-0.02em', fontFamily: "'Syne', 'Inter', sans-serif" }}>{(lastFmService.splitArtists(track.artist || '') || [track.artist]).join(' • ')}</h3>
                   <div style={{ color: '#a0a0a0', fontSize: '1rem', lineHeight: 1.75, textAlign: 'left' }}>
                     {isLoadingBio ? (
                       <div>
@@ -434,8 +434,17 @@ Melodies beyond compare`;
                         <div style={{ height: '1rem', backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: '0.25rem', marginBottom: '0.5rem' }} />
                         <div style={{ height: '1rem', backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: '0.25rem' }} />
                       </div>
+                    ) : artistInfos.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        {artistInfos.map((info) => (
+                          <div key={info.name}>
+                            <p style={{ margin: '0 0 0.25rem', color: '#e0e0e0', fontWeight: 500 }}>{info.name}</p>
+                            <p style={{ textAlign: 'left', margin: 0 }}>{info.bio || defaultArtistBio}</p>
+                          </div>
+                        ))}
+                      </div>
                     ) : (
-                      <p style={{ textAlign: 'left' }}>{artistInfo?.bio || defaultArtistBio}</p>
+                      <p style={{ textAlign: 'left' }}>{defaultArtistBio}</p>
                     )}
                   </div>
                 </div>

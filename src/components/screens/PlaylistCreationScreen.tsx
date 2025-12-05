@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Plus, Trash2, Play, HardDrive, Music, X, GripVertical, Upload, Image as ImageIcon, Search } from 'lucide-react';
 import { ImageWithFallback } from '../figma/ImageWithFallback';
+import { openBrickDB } from '../../utils/db';
 import type { Track } from '../../types';
 
 interface PlaylistCreationScreenProps {
@@ -80,40 +81,7 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
     }
   };
 
-  const openDB = (): Promise<IDBDatabase> => {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open('BrickMusicDB', 4);
-
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result);
-
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-
-        // Create localTracks store if it doesn't exist
-        if (!db.objectStoreNames.contains('localTracks')) {
-          db.createObjectStore('localTracks', { keyPath: 'id' });
-        }
-
-        // Create playlists store if it doesn't exist
-        if (!db.objectStoreNames.contains('playlists')) {
-          db.createObjectStore('playlists', { keyPath: 'id' });
-        }
-
-        // Create recentlyPlayedPlaylists store if it doesn't exist
-        if (!db.objectStoreNames.contains('recentlyPlayedPlaylists')) {
-          const store = db.createObjectStore('recentlyPlayedPlaylists', { keyPath: 'playlistId' });
-          store.createIndex('playedAt', 'playedAt', { unique: false });
-        }
-
-        // Create recentlyPlayedTracks store if it doesn't exist
-        if (!db.objectStoreNames.contains('recentlyPlayedTracks')) {
-          const store = db.createObjectStore('recentlyPlayedTracks', { keyPath: 'trackId' });
-          store.createIndex('playedAt', 'playedAt', { unique: false });
-        }
-      };
-    });
-  };
+  const openDB = (): Promise<IDBDatabase> => openBrickDB();
 
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);

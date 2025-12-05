@@ -61,6 +61,7 @@ export interface Track {
   bitrateKbps?: number;
   codecLabel?: string;
   file?: File;
+  filePath?: string;
 }
 
 export interface Connection {
