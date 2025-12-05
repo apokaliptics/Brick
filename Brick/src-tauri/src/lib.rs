@@ -1,6 +1,15 @@
+use image::{codecs::jpeg::JpegEncoder, imageops::FilterType, ImageEncoder};
+use lofty::{Accessor, AudioFile, Probe};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
-use std::{fs::File, io::BufReader, sync::{Arc, Mutex}, time::Duration};
-use tauri::{Emitter, State};
+use std::{
+    fs::File,
+    io::BufReader,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tauri::{path::app_data_dir, Emitter, State};
+use sha2::{Digest, Sha256};
 
 /// Shared audio playback state managed on the Rust side.
 pub struct AudioState {
@@ -12,6 +21,17 @@ pub struct AudioState {
     sink: Sink,
     current_file: Option<String>,
     volume: f32,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SongMetadata {
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    duration: u64,
+    file_path: String,
+    cover_art_path: Option<String>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -139,6 +159,74 @@ fn stop_song(app: tauri::AppHandle, state: State<Arc<Mutex<AudioState>>>) -> Res
     Ok(())
 }
 
+fn cache_cover_jpg(app: &tauri::AppHandle, picture_bytes: &[u8]) -> Option<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(picture_bytes);
+    let hash = format!("{:x}", hasher.finalize());
+
+    let mut covers_dir: PathBuf = app_data_dir(app.config())?;
+    covers_dir.push("covers");
+    std::fs::create_dir_all(&covers_dir).ok()?;
+
+    let cover_path = covers_dir.join(format!("{hash}.jpg"));
+    if cover_path.exists() {
+        return cover_path.to_str().map(|s| s.to_string());
+    }
+
+    let img = image::load_from_memory(picture_bytes).ok()?;
+    let resized = img.resize(500, 500, FilterType::Lanczos3);
+
+    let mut out_file = File::create(&cover_path).ok()?;
+    let mut encoder = JpegEncoder::new_with_quality(&mut out_file, 80);
+    encoder.encode_image(&resized).ok()?;
+
+    cover_path.to_str().map(|s| s.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn scan_music_file(app: tauri::AppHandle, file_path: String) -> Result<SongMetadata, String> {
+    let file = File::open(&file_path).map_err(|e| format!("File opening error: {}", e))?;
+    let mut reader = BufReader::new(file);
+
+    let tagged_file = Probe::new(&mut reader)
+        .guess_file_type()
+        .map_err(|e| format!("Probe error: {}", e))?
+        .read()
+        .map_err(|e| format!("Tag read error: {}", e))?;
+
+    let properties = tagged_file.properties();
+    let duration = properties.duration().as_secs();
+
+    let mut title = None;
+    let mut artist = None;
+    let mut album = None;
+    let mut cover_art_path = None;
+
+    if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+        title = tag.title().map(|s| s.to_string());
+        artist = tag.artist().map(|s| s.to_string());
+        album = tag.album().map(|s| s.to_string());
+
+        if let Some(picture) = tag.pictures().first() {
+            cover_art_path = cache_cover_jpg(&app, &picture.data);
+        }
+    }
+
+    Ok(SongMetadata {
+        title,
+        artist,
+        album,
+        duration,
+        file_path,
+        cover_art_path,
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn read_lyrics(file_path: String) -> Result<String, String> {
+    std::fs::read_to_string(&file_path).map_err(|e| format!("Lyrics read error: {}", e))
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn set_volume(
     app: tauri::AppHandle,
@@ -233,7 +321,9 @@ pub fn run() {
             resume_song,
             stop_song,
             set_volume,
-            seek_to
+            seek_to,
+            scan_music_file,
+            read_lyrics
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

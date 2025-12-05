@@ -1,10 +1,32 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Capability for the main window with asset protocol access to user media",
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default"
-  ]
+    "opener:default",
+    "fs:read",
+    "path:default",
+    "shell:allow-open",
+    "asset:protocol"
+  ],
+  "fs": {
+    "scope": [
+      "$AUDIO/*",
+      "$DOWNLOADS/*",
+      "$HOME/*",
+      "D:/*",
+      "E:/*"
+    ]
+  },
+  "assetProtocol": {
+    "scope": [
+      "$AUDIO/*",
+      "$DOWNLOADS/*",
+      "$HOME/*",
+      "D:/*",
+      "E:/*"
+    ]
+  }
 }
