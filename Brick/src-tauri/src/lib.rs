@@ -4,14 +4,17 @@ use tauri::{Emitter, State};
 
 /// Shared audio playback state managed on the Rust side.
 pub struct AudioState {
-    _stream: OutputStream,
+    // The `OutputStream` is purposely not stored inside the shared state so the
+    // state remains `Send + Sync`. We keep the `OutputStream` alive in the
+    // `run()` function so the stream does not get dropped. The `stream_handle`
+    // is used to create sinks from other threads safely.
     stream_handle: OutputStreamHandle,
     sink: Sink,
     current_file: Option<String>,
     volume: f32,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 struct AudioEventPayload {
     status: String,
     file_path: Option<String>,
@@ -34,7 +37,10 @@ fn play_song(
     state: State<Arc<Mutex<AudioState>>>,
     file_path: String,
 ) -> Result<(), String> {
+    // `state` is a `State<Arc<Mutex<AudioState>>>`; call `inner()` to get the
+    // `Arc<Mutex<_>>` and then lock it.
     let mut audio = state
+        .inner()
         .lock()
         .map_err(|e| format!("Mutex lock error: {}", e))?;
 
@@ -42,7 +48,7 @@ fn play_song(
     let decoder = Decoder::new(BufReader::new(file))
         .map_err(|e| format!("Decoder error: {}", e))?;
 
-    let mut new_sink = Sink::try_new(&audio.stream_handle)
+    let new_sink = Sink::try_new(&audio.stream_handle)
         .map_err(|e| format!("Sink creation error: {}", e))?;
     new_sink.set_volume(audio.volume);
     new_sink.append(decoder);
@@ -67,6 +73,7 @@ fn play_song(
 #[tauri::command(rename_all = "camelCase")]
 fn pause_song(app: tauri::AppHandle, state: State<Arc<Mutex<AudioState>>>) -> Result<(), String> {
     let mut audio = state
+        .inner()
         .lock()
         .map_err(|e| format!("Mutex lock error: {}", e))?;
 
@@ -88,6 +95,7 @@ fn pause_song(app: tauri::AppHandle, state: State<Arc<Mutex<AudioState>>>) -> Re
 #[tauri::command(rename_all = "camelCase")]
 fn resume_song(app: tauri::AppHandle, state: State<Arc<Mutex<AudioState>>>) -> Result<(), String> {
     let mut audio = state
+        .inner()
         .lock()
         .map_err(|e| format!("Mutex lock error: {}", e))?;
 
@@ -109,6 +117,7 @@ fn resume_song(app: tauri::AppHandle, state: State<Arc<Mutex<AudioState>>>) -> R
 #[tauri::command(rename_all = "camelCase")]
 fn stop_song(app: tauri::AppHandle, state: State<Arc<Mutex<AudioState>>>) -> Result<(), String> {
     let mut audio = state
+        .inner()
         .lock()
         .map_err(|e| format!("Mutex lock error: {}", e))?;
 
@@ -138,6 +147,7 @@ fn set_volume(
 ) -> Result<(), String> {
     let clamped = level.clamp(0.0, 1.0);
     let mut audio = state
+        .inner()
         .lock()
         .map_err(|e| format!("Mutex lock error: {}", e))?;
 
@@ -178,7 +188,7 @@ fn seek_to(
 
     let skipped = decoder.skip_duration(Duration::from_secs_f32(position_seconds.max(0.0)));
 
-    let mut new_sink = Sink::try_new(&audio.stream_handle)
+    let new_sink = Sink::try_new(&audio.stream_handle)
         .map_err(|e| format!("Sink creation error: {}", e))?;
     new_sink.set_volume(audio.volume);
     new_sink.append(skipped);
@@ -201,12 +211,12 @@ fn seek_to(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let (stream, stream_handle) = OutputStream::try_default()
+    let (_stream, stream_handle) = OutputStream::try_default()
         .expect("Failed to open audio output stream");
     let sink = Sink::try_new(&stream_handle).expect("Failed to create audio sink");
 
     let audio_state = Arc::new(Mutex::new(AudioState {
-        _stream: stream,
+        // note: `_stream` intentionally not included in the shared state
         stream_handle,
         sink,
         current_file: None,
