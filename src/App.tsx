@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Home, Zap, Plus, List, Search, Disc3, Play, X, HardDrive, Cloud } from 'lucide-react';
+import SeismicMonitor from './components/SeismicMonitor';
 import { useTheme } from './contexts/ThemeContext';
 import { useWall } from './contexts/WallContext';
 import { HomeScreenV2 } from './components/screens/HomeScreenV2';
-import { RadarScreen } from './components/screens/RadarScreen_temp';
+import { RadarScreen } from './components/screens/RadarScreen';
 import { VaultScreen } from './components/screens/VaultScreen';
 import { ProfileScreen } from './components/screens/ProfileScreen';
 import { FeedScreen } from './components/screens/FeedScreen';
@@ -24,8 +25,6 @@ import { PatronageLockModal } from './components/modals/PatronageLockModal';
 import { UserSettingsModal } from './components/modals/UserSettingsModal';
 import { ImageWithFallback } from './components/figma/ImageWithFallback';
 import { logoutUser } from './utils/auth';
-import { formatBitrate } from './utils/audioMetaHelpers';
-import { useTrackAudioMeta } from './hooks/useTrackAudioMeta';
 import { mockPlaylists, mockTracks, mockCurrentUser, mockArtists, mockConnections } from './data/mockData';
 import type { Track, Playlist, Screen, User } from './types';
 import { addRecentlyPlayedPlaylist } from './utils/recentlyPlayedPlaylists';
@@ -110,15 +109,14 @@ export default function App() {
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [musicPlayerControls, setMusicPlayerControls] = useState<any>(null);
   const [isPink, setIsPink] = useState(false);
+  const [isMonitorEnabled, setIsMonitorEnabled] = useState(false);
+  const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
 
   const nowPlayingTrack = currentTrack ?? currentPlayingTrack;
-  const nowPlayingMeta = useTrackAudioMeta(nowPlayingTrack);
-  const codecBadge = nowPlayingMeta?.codecLabel
-    ?? nowPlayingTrack?.codecLabel
-    ?? nowPlayingTrack?.quality?.toUpperCase();
-  const bitDepthBadge = nowPlayingMeta?.bitDepth ?? nowPlayingTrack?.bitDepth;
-  const sampleRateBadge = nowPlayingMeta?.sampleRate ?? nowPlayingTrack?.sampleRate;
-  const bitrateBadge = nowPlayingMeta?.bitrateKbps ?? nowPlayingTrack?.bitrateKbps;
+  const codecBadge = nowPlayingTrack?.codec ?? nowPlayingTrack?.quality?.toUpperCase();
+  const bitDepthBadge = nowPlayingTrack?.bitDepth;
+  const sampleRateBadge = nowPlayingTrack?.sampleRate;
+  const bitrateBadge = nowPlayingTrack?.bitrate;
   const isLocalSource = Boolean(
     nowPlayingTrack?.file ||
     (nowPlayingTrack?.audioUrl && !String(nowPlayingTrack.audioUrl).startsWith('http'))
@@ -149,6 +147,66 @@ export default function App() {
   const notifyWallSessionReset = (reason: string) => {
     musicPlayerControls?.invalidateWallSession?.(reason);
   };
+
+  // Initialize visualizer state and global listener
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let domListener: ((e: Event) => void) | null = null;
+    (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const { listen } = await import('@tauri-apps/api/event');
+        try {
+          const enabled = await invoke<boolean>('get_config_visualizer_state');
+          setIsMonitorEnabled(!!enabled);
+        } catch {
+          // fallback to localStorage
+          try {
+            const cached = localStorage.getItem('visualizerEnabled');
+            if (cached !== null) setIsMonitorEnabled(JSON.parse(cached));
+          } catch {}
+        }
+        unlisten = await listen('visualizer-state-changed', (e: any) => {
+          const payload = e?.payload as { enabled?: boolean };
+          if (typeof payload?.enabled === 'boolean') {
+            setIsMonitorEnabled(payload.enabled);
+          }
+        });
+      } catch {
+        // Not in Tauri; use window events & localStorage fallback
+        try {
+          const cached = localStorage.getItem('visualizerEnabled');
+          if (cached !== null) setIsMonitorEnabled(JSON.parse(cached));
+        } catch {}
+        domListener = (ev: any) => {
+          const enabled = ev?.detail?.enabled;
+          if (typeof enabled === 'boolean') setIsMonitorEnabled(enabled);
+        };
+        window.addEventListener('visualizer-state-changed', domListener as EventListener);
+      }
+    })();
+    return () => { if (unlisten) unlisten(); if (domListener) window.removeEventListener('visualizer-state-changed', domListener as EventListener); };
+  }, []);
+
+  // Try to get analyser node from engine singleton if available
+  useEffect(() => {
+    try {
+      const engine: any = (window as any).__brickEngineInstance;
+      if (engine && typeof engine.getAnalyserNode === 'function') {
+        setAnalyserNode(engine.getAnalyserNode() || null);
+      }
+    } catch {}
+  }, []);
+
+  // If music player controls expose analyser, wire it here
+  useEffect(() => {
+    if (musicPlayerControls && typeof musicPlayerControls.getAnalyserNode === 'function') {
+      try {
+        const node = musicPlayerControls.getAnalyserNode();
+        if (node) setAnalyserNode(node);
+      } catch {}
+    }
+  }, [musicPlayerControls]);
   
   // Modal states
   const [showArtistProfile, setShowArtistProfile] = useState(false);
@@ -223,8 +281,8 @@ export default function App() {
             let fileRef = track.file;
             let bitDepth = track.bitDepth;
             let sampleRate = track.sampleRate;
-            let bitrateKbps = track.bitrateKbps;
-            let codecLabel = track.codecLabel;
+            let bitrate = track.bitrate;
+            let codec = track.codec ?? track.quality?.toUpperCase();
             
             // If no audioUrl or it's a local track ID, try to load from IndexedDB
             if (!audioUrl || !audioUrl.startsWith('http')) {
@@ -241,8 +299,8 @@ export default function App() {
                   fileRef = localTrack.file;
                   bitDepth = bitDepth ?? localTrack.bitDepth;
                   sampleRate = sampleRate ?? localTrack.sampleRate;
-                  bitrateKbps = bitrateKbps ?? localTrack.bitrateKbps;
-                  codecLabel = codecLabel ?? localTrack.codecLabel;
+                  bitrate = bitrate ?? localTrack.bitrate ?? localTrack.bitrateKbps;
+                  codec = codec ?? localTrack.codec ?? localTrack.codecLabel;
                   console.log('Recreated blob URL for track:', track.title);
                 }
               } catch (error) {
@@ -263,8 +321,8 @@ export default function App() {
               duration: track.duration,
               bitDepth,
               sampleRate,
-              bitrateKbps,
-              codecLabel,
+              bitrate,
+              codec,
               file: fileRef,
             } as Track;
           })
@@ -301,8 +359,8 @@ export default function App() {
           isPatronage: false,
           bitDepth: firstPlayerTrack.bitDepth,
           sampleRate: firstPlayerTrack.sampleRate,
-          bitrateKbps: firstPlayerTrack.bitrateKbps,
-          codecLabel: firstPlayerTrack.codecLabel,
+          bitrate: firstPlayerTrack.bitrate ?? (firstPlayerTrack as any).bitrateKbps,
+          codec: firstPlayerTrack.codec ?? firstPlayerTrack.quality?.toUpperCase(),
           file: firstPlayerTrack.file,
         };
         
@@ -346,8 +404,8 @@ export default function App() {
       quality: track.quality,
       bitDepth: track.bitDepth,
       sampleRate: track.sampleRate,
-      bitrateKbps: track.bitrateKbps,
-      codecLabel: track.codecLabel,
+      bitrate: track.bitrate ?? (track as any).bitrateKbps,
+      codec: track.codec ?? (track as any).codecLabel ?? track.quality?.toUpperCase(),
       file: track.file,
     }));
     
@@ -374,10 +432,10 @@ export default function App() {
       playedAt: Date.now(),
       album: localTrack.album,
       quality: localTrack.format,
-      codecLabel: localTrack.codecLabel,
+      codec: localTrack.codec ?? localTrack.codecLabel ?? localTrack.format,
       bitDepth: localTrack.bitDepth,
       sampleRate: localTrack.sampleRate,
-      bitrateKbps: localTrack.bitrateKbps,
+      bitrate: localTrack.bitrate ?? localTrack.bitrateKbps,
       durationSeconds: typeof localTrack.duration === 'number' ? localTrack.duration : undefined,
     }).catch(err => console.error('Failed to track recently played track:', err));
 
@@ -395,8 +453,8 @@ export default function App() {
       duration: localTrack.duration,
       bitDepth: localTrack.bitDepth,
       sampleRate: localTrack.sampleRate,
-      bitrateKbps: localTrack.bitrateKbps,
-      codecLabel: localTrack.codecLabel,
+      bitrate: localTrack.bitrate ?? localTrack.bitrateKbps,
+      codec: localTrack.codec ?? localTrack.codecLabel ?? localTrack.format,
       file: localTrack.file,
     };
 
@@ -414,8 +472,8 @@ export default function App() {
       isPatronage: false,
       bitDepth: localTrack.bitDepth,
       sampleRate: localTrack.sampleRate,
-      bitrateKbps: localTrack.bitrateKbps,
-      codecLabel: localTrack.codecLabel,
+      bitrate: localTrack.bitrate ?? localTrack.bitrateKbps,
+      codec: localTrack.codec ?? localTrack.codecLabel ?? localTrack.format,
       file: localTrack.file,
     };
 
@@ -445,8 +503,8 @@ export default function App() {
       duration: track.duration,
       bitDepth: track.bitDepth,
       sampleRate: track.sampleRate,
-      bitrateKbps: track.bitrateKbps,
-      codecLabel: track.codecLabel,
+      bitrate: track.bitrate ?? track.bitrateKbps,
+      codec: track.codec ?? track.codecLabel ?? track.format,
       file: track.file,
     }));
 
@@ -465,8 +523,8 @@ export default function App() {
       isPatronage: false,
       bitDepth: firstTrack.bitDepth,
       sampleRate: firstTrack.sampleRate,
-      bitrateKbps: firstTrack.bitrateKbps,
-      codecLabel: firstTrack.codecLabel,
+      bitrate: firstTrack.bitrate ?? firstTrack.bitrateKbps,
+      codec: firstTrack.codec ?? firstTrack.codecLabel ?? firstTrack.format,
       file: firstTrack.file,
     };
 
@@ -495,8 +553,8 @@ export default function App() {
       isPatronage: track.isPatronage || false,
       bitDepth: track.bitDepth,
       sampleRate: track.sampleRate,
-      bitrateKbps: track.bitrateKbps,
-      codecLabel: track.codecLabel,
+      bitrate: track.bitrate ?? track.bitrateKbps,
+      codec: track.codec ?? track.codecLabel ?? track.quality?.toUpperCase(),
       file: track.file,
     };
     
@@ -718,12 +776,8 @@ export default function App() {
     return Math.max(0, Math.round(finalScore));
   };
 
-  const handleFilterChange = (filter: 'all' | 'payroll' | 'network' | 'recent' | 'feed') => {
-    if (filter === 'feed') {
-      setActiveTab('feed' as Screen);
-    } else {
-      setHomeFilter(filter);
-    }
+  const handleFilterChange = (filter: 'all' | 'payroll' | 'network' | 'recent') => {
+    setHomeFilter(filter);
   };
 
   const selectedArtist = mockArtists.find(a => a.id === selectedArtistId);
@@ -742,7 +796,7 @@ export default function App() {
     feed: 'NEIGHBORHOOD',
   };
   const currentPageLabel = pageLabelMap[activeTab];
-  const navTab: Exclude<Screen, 'feed'> = activeTab === 'feed' ? 'home' : activeTab;
+  const navTab: Screen = activeTab;
   const topBarItems = [
     { label: 'OPERATOR', value: operatorName },
     { label: 'TIER', value: tierLabel, isPink: isPink },
@@ -853,14 +907,25 @@ export default function App() {
           <VaultScreen
             onOpenConnectionManagement={() => setShowConnectionManagement(true)}
             onSignOut={() => {
-              try {
-                logoutUser();
-              } catch {}
-              setCurrentUser(null);
-              setAuthState('login');
-              setActiveTab('home' as Screen);
-            }}
+                try {
+                  logoutUser();
+                } catch {}
+                // Reset auth state and clear sensitive UI states
+                setCurrentUser(null);
+                setAuthState('login');
+                setActiveTab('home' as Screen);
+                // Stop playback and clear queue when logging out
+                setShowPlayer(false);
+                setIsPlaying(false);
+                setPlaylist([]);
+                setCurrentPlayingTrack(null);
+                setCurrentTrack(null);
+                setMusicPlayerControls(null);
+              }}
           />
+        )}
+        {activeTab === 'feed' && (
+          <FeedScreen currentUser={currentUser} />
         )}
         
         {/* Feed Button - Removed, now in pill navigation */}
@@ -870,7 +935,7 @@ export default function App() {
       {/* Right Sidebar - Currently Playing (Fixed) */}
       {(currentPlayingTrack || !currentPlayingTrack) && (
         <div
-            className="hidden md:flex md:flex-col border-l overflow-hidden fixed right-0 top-0 bottom-0 z-30 now-playing-rail"
+          className="hidden md:flex md:flex-col border-l overflow-hidden fixed right-0 top-0 bottom-0 z-30 now-playing-rail player-ui"
             style={{
               backgroundColor: 'rgba(30, 30, 30, 0.8)',
               backdropFilter: 'blur(40px)',
@@ -897,7 +962,7 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="mb-4 rounded-lg mx-auto flex items-center justify-center" style={{ width: '180px', height: '180px', border: '1px dashed rgba(255,255,255,0.1)', backgroundColor: 'rgba(26,26,26,0.6)' }}>
-                      <span className="mono" style={{ color: '#888888', fontSize: '0.8rem' }}>No track playing</span>
+                      <span className="mono" style={{ color: '#b0b0b0', fontSize: '0.8rem' }}>No track playing</span>
                     </div>
                   )}
 
@@ -945,7 +1010,7 @@ export default function App() {
                         >
                           {bitDepthBadge ? `${bitDepthBadge}-bit` : ''}
                           {bitDepthBadge && sampleRateBadge ? ' / ' : ''}
-                          {sampleRateBadge ? `${sampleRateBadge}kHz` : ''}
+                          {sampleRateBadge ? `${sampleRateBadge} Hz` : ''}
                         </span>
                       )}
                       {bitrateBadge && (
@@ -958,12 +1023,12 @@ export default function App() {
                             fontSize: '0.7rem'
                           }}
                         >
-                          {formatBitrate(bitrateBadge)}
+                            {`${Math.round(bitrateBadge).toLocaleString()} kbps`}
                         </span>
                       )}
                     </div>
                     <p
-                      style={{ color: '#e0e0e0' }}
+                      style={{ color: '#e0e0e0', fontFamily: '"Chakra Petch", "Syne", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}
                       className="text-sm font-bold mb-2 truncate w-full min-w-0 cursor-pointer hover:text-[#d32f2f] transition-colors"
                       onClick={() => setShowPlayer(true)}
                       title={currentPlayingTrack.name}
@@ -973,7 +1038,7 @@ export default function App() {
                     
                     {/* Added Artist Name for better context */}
                     <p 
-                      style={{ color: '#888888' }} 
+                      style={{ color: '#888888', fontFamily: '"Chakra Petch", "Syne", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }} 
                       className="text-xs truncate w-full min-w-0 mb-3"
                       title={currentPlayingTrack.artist}
                     >
@@ -1003,8 +1068,23 @@ export default function App() {
                   </div>
                   )}
 
+                  {/* Seismic Monitor - fills remaining vertical space */}
+                  {isMonitorEnabled && (
+                    <div className="w-full" style={{ maxWidth: 'min(320px, 100%)', marginTop: '6px' }}>
+                      {/* Label for the monitor */}
+                      <div className="px-3 mb-2 text-center">
+                        <p className="mono text-xs" style={{ color: '#a0a0a0', margin: 0, textTransform: 'uppercase', letterSpacing: '0.12em' }}>Seismic Analyzer</p>
+                      </div>
+                      {/* Keep the monitor square and prevent pushing content down; use overflow hidden */}
+                      <div className="w-full aspect-square overflow-hidden rounded" style={{ backgroundColor: 'transparent', position: 'relative', border: import.meta.env.DEV ? '1px dashed rgba(211,47,47,0.8)' : 'none', maxWidth: 'min(320px, 100%)' }}>
+                        <SeismicMonitor analyser={analyserNode} enabled={isMonitorEnabled} />
+                        {/* Debug badge removed */}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Queue Info - Industrial Luxury Design */}
-                  {playlist.length > 1 && (
+                  {!isMonitorEnabled && playlist.length > 1 && (
                     <div className="mt-4 overflow-hidden" style={{ width: '100%', maxWidth: 'min(320px, 100%)' }}>
                       {/* Header with divider line */}
                       <div className="px-4 mb-4 flex items-center gap-3">
@@ -1092,7 +1172,6 @@ export default function App() {
                                         fontWeight: 600,
                                         letterSpacing: '0.02em',
                                         lineHeight: '1.2',
-                                        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
                                       }} 
                                       className="truncate w-full min-w-0 group-hover:text-[#d32f2f] transition-colors"
                                       title={track.name}
@@ -1107,7 +1186,6 @@ export default function App() {
                                         letterSpacing: '0.03em',
                                         lineHeight: '1.3',
                                         marginTop: '2px',
-                                        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
                                       }} 
                                       className="truncate w-full min-w-0"
                                       title={track.artist}
@@ -1165,35 +1243,7 @@ export default function App() {
             </div>
       )}
       {/* Feed Screen (Full screen overlay) */}
-      {(activeTab as string) === 'feed' && (
-        <div className="fixed inset-0 z-50 bg-[#1a1a1a] overflow-y-auto">
-          <div className="max-w-2xl mx-auto">
-            <div
-              className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b"
-              style={{
-                backgroundColor: 'rgba(30, 30, 30, 0.95)',
-                backdropFilter: 'blur(40px)',
-                borderColor: colors.border,
-              }}
-            >
-              <h3 style={{ color: '#e0e0e0' }}>The Neighborhood</h3>
-              <button
-                onClick={() => setActiveTab('home')}
-                className="px-4 py-2 rounded-full transition-colors hover:bg-[#2a2a2a]"
-                style={{
-                  backgroundColor: 'rgba(37, 37, 37, 0.5)',
-                  color: '#a0a0a0',
-                }}
-              >
-                <span className="mono" style={{ fontSize: '0.75rem' }}>
-                  Close
-                </span>
-              </button>
-            </div>
-            <FeedScreen currentUser={currentUser} />
-          </div>
-        </div>
-      )}
+      {/* Feed Screen used to be a full screen overlay; it now renders inline like other pages */}
 
       {/* Navigation */}
       <Navigation
@@ -1309,6 +1359,27 @@ export default function App() {
         onClose={() => setShowUserSettings(false)}
         userName={currentUser?.name || 'Guest'}
         userAvatar={currentUser?.avatar || ''}
+        analyserNode={analyserNode}
+        // Forward visualizer state handlers to ensure a single source of truth
+        // This keeps the toggle in DisplaySettings and the app's state synchronized
+        enabled={isMonitorEnabled}
+        onToggle={(next: boolean) => {
+          // Update local UI state immediately
+          setIsMonitorEnabled(next);
+          (async () => {
+            try {
+              const core: any = await import('@tauri-apps/api/core');
+              if (core?.invoke) {
+                await core.invoke('set_visualizer_enabled', { is_enabled: next });
+              }
+            } catch (e) {
+              // fallback: persist to localStorage and dispatch event so app picks up
+              try { localStorage.setItem('visualizerEnabled', JSON.stringify(next)); } catch {}
+            } finally {
+              try { window.dispatchEvent(new CustomEvent('visualizer-state-changed', { detail: { enabled: next } })); } catch {}
+            }
+          })();
+        }}
       />
 
       {/* Music Player - always fixed (shows empty state without a track) */}

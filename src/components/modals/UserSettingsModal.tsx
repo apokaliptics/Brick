@@ -1,11 +1,12 @@
 import { X, Download, Heart, Zap } from 'lucide-react';
+import DisplaySettings from '../Settings/Display';
+import { repairMetadataInDB } from '../../utils/repairMetadata';
 // @ts-ignore
 import { useState, useEffect } from 'react';
 import { openBrickDB } from '../../utils/db';
 
 interface UserSettings {
   monthlySupport: boolean;
-  plan: 'Sketcher' | 'Mason' | 'Architect';
 }
 
 interface UserSettingsModalProps {
@@ -13,15 +14,17 @@ interface UserSettingsModalProps {
   onClose: () => void;
   userName?: string;
   userAvatar?: string;
+  analyserNode?: AnalyserNode | null;
+  enabled?: boolean;
+  onToggle?: (next: boolean) => void;
 }
 
-export function UserSettingsModal({ isOpen, onClose, userName = 'User', userAvatar = 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=100' }: UserSettingsModalProps) {
+export function UserSettingsModal({ isOpen, onClose, userName = 'User', userAvatar = 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=100', analyserNode = null, enabled = false, onToggle = () => {} }: UserSettingsModalProps) {
   const [settings, setSettings] = useState<UserSettings>(() => {
     const saved = localStorage.getItem('userSettings');
     if (saved) return JSON.parse(saved);
     return {
       monthlySupport: false,
-      plan: 'Sketcher' as const,
     };
   });
 
@@ -106,33 +109,7 @@ export function UserSettingsModal({ isOpen, onClose, userName = 'User', userAvat
           </div>
         </div>
 
-        {/* Plan Section */}
-        <div className="mb-6">
-          <h3 style={{ color: '#e0e0e0' }} className="font-semibold mb-3">
-            Plan
-          </h3>
-          <div className="grid grid-cols-3 gap-2">
-            {(['Sketcher', 'Mason', 'Architect'] as const).map((plan) => (
-              <button
-                key={plan}
-                onClick={() => setSettings({ ...settings, plan })}
-                className="p-3 rounded-lg transition-all text-sm font-medium"
-                style={{
-                  backgroundColor: settings.plan === plan ? 'rgba(211, 47, 47, 0.15)' : '#252525',
-                  color: settings.plan === plan ? '#d32f2f' : '#a0a0a0',
-                  border: settings.plan === plan ? '1px solid #d32f2f' : '1px solid #333333',
-                }}
-              >
-                {plan}
-              </button>
-            ))}
-          </div>
-          <p style={{ color: '#666666' }} className="text-xs mt-2">
-            {settings.plan === 'Sketcher' && 'Basic features, up to 10 playlists'}
-            {settings.plan === 'Mason' && 'Advanced features, up to 50 playlists'}
-            {settings.plan === 'Architect' && 'Premium features, unlimited playlists'}
-          </p>
-        </div>
+        {/* Removed Plan Selection */}
 
         {/* Monthly Support Toggle */}
         <div className="mb-6 p-3 rounded-lg" style={{ backgroundColor: '#252525' }}>
@@ -183,6 +160,30 @@ export function UserSettingsModal({ isOpen, onClose, userName = 'User', userAvat
         >
           <Download size={18} />
           Export Listening Data
+        </button>
+
+        {/* Display Settings: Seismic Monitor Toggle */}
+        <div className="mb-4 rounded-lg" style={{ backgroundColor: '#252525', border: '1px solid #333333' }}>
+          {/* DisplaySettings' enabled state is passed down from App; show placeholder for now */}
+          <DisplaySettings analyserNode={analyserNode} enabled={enabled} onToggle={onToggle} />
+        </div>
+
+        {/* Repair Metadata Button */}
+        <button
+          onClick={async () => {
+            try {
+              const res = await repairMetadataInDB();
+              alert(`Repair complete — updated ${res.updated} track${res.updated === 1 ? '' : 's'}`);
+            } catch (e) {
+              console.error('Repair failed', e);
+              alert('Repair failed — check console for details');
+            }
+          }}
+          className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg mb-4 transition-all hover:scale-105 active:scale-95"
+          style={{ backgroundColor: '#252525', color: '#e0e0e0', border: '1px solid #333333' }}
+        >
+          <Zap size={18} />
+          Repair Local Metadata
         </button>
 
         {/* Info */}
