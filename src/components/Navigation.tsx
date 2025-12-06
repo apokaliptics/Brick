@@ -1,11 +1,11 @@
-import { Home, Target, Grid, Lock, Menu, X, Moon, Sun, Settings, Bell } from 'lucide-react';
+import { Home, Target, Grid, Lock, Menu, X, Moon, Sun, Settings, Bell, Users } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useWall } from '../contexts/WallContext';
 import type { Screen } from '../types';
 import pinkStyles from '../styles/pinkTier.module.css';
 
-type NavTab = Exclude<Screen, 'feed'>;
+type NavTab = Screen;
 
 interface NavNotification {
   id: string;
@@ -97,6 +97,7 @@ export function Navigation({
     { id: 'home', label: 'Foundation', icon: Home },
     { id: 'radar', label: 'Radar', icon: Target },
     { id: 'profile', label: 'My Wall', icon: Grid },
+    { id: 'feed', label: 'Neighborhood', icon: Users },
     { id: 'vault', label: 'Vault', icon: Lock },
   ] as const;
 
@@ -105,7 +106,6 @@ export function Navigation({
     { id: 'payroll', label: 'Payroll' },
     { id: 'network', label: 'Network' },
     { id: 'recent', label: 'Recent' },
-    { id: 'feed', label: 'Feed' },
   ] as const;
 
   return (
@@ -129,7 +129,7 @@ export function Navigation({
               <button
                 onClick={handleNotificationToggle}
                 className={`flex items-center justify-center rounded-full transition-all duration-300 relative overflow-hidden group ${
-                  unreadCount > 0 ? 'animate-pulse' : ''
+                  unreadCount > 0 ? 'notification-glow' : ''
                 }`}
                 style={{
                   width: '36px',
@@ -154,7 +154,7 @@ export function Navigation({
                 />
                 {unreadCount > 0 && (
                   <span
-                    className="absolute -top-1 -right-1 flex items-center justify-center rounded-full text-[0.55rem] font-bold animate-bounce"
+                    className="absolute -top-1 -right-1 flex items-center justify-center rounded-full text-[0.55rem] font-bold notification-badge"
                     style={{
                       width: '18px',
                       height: '18px',
@@ -162,7 +162,6 @@ export function Navigation({
                       color: '#ffffff',
                       boxShadow: '0 0 12px rgba(255,0,204,0.6), 0 2px 4px rgba(0,0,0,0.3)',
                       border: '1px solid rgba(255,255,255,0.2)',
-                      animation: 'pulse 2s infinite',
                     }}
                   >
                     {unreadCount > 9 ? '9+' : unreadCount}
@@ -171,11 +170,11 @@ export function Navigation({
               </button>
               {notificationsOpen && (
                 <div
-                  className="absolute mt-3 rounded-xl shadow-2xl border"
+                  className="absolute mt-4 rounded-xl shadow-2xl border notification-popover spring-in fade-in"
                   style={{
-                    width: '380px',
+                    width: '420px',
                     maxHeight: '280px',
-                    right: '-200px',
+                    right: '-220px',
                     backgroundColor: 'rgba(18, 18, 18, 0.96)',
                     backdropFilter: 'blur(20px)',
                     borderColor: 'rgba(198, 167, 0, 0.15)',
@@ -184,13 +183,13 @@ export function Navigation({
                   }}
                 >
                   <div
-                    className="px-4 py-2 border-b flex items-center justify-between"
+                    className="px-6 py-3 border-b flex items-center justify-between"
                     style={{
                       borderColor: 'rgba(198, 167, 0, 0.1)',
                       background: 'linear-gradient(180deg, rgba(198, 167, 0, 0.04), rgba(198, 167, 0, 0.01))',
                     }}
                   >
-                    <p className="mono text-[0.65rem] tracking-[0.3em] font-medium" style={{ color: 'rgba(198, 167, 0, 0.8)' }}>
+                    <p className="text-[0.65rem] uppercase tracking-[0.25em] font-semibold" style={{ color: 'rgba(198, 167, 0, 0.8)' }}>
                       ALERTS
                     </p>
                     <button
@@ -202,9 +201,20 @@ export function Navigation({
                       <X size={14} strokeWidth={2} />
                     </button>
                   </div>
-                  <div className="overflow-y-auto" style={{ maxHeight: '232px' }}>
+                  <div className="overflow-y-auto" style={{ maxHeight: '240px' }}>
                     {notificationList.length === 0 && (
-                      <div className="px-4 py-6 text-xs text-center" style={{ color: 'rgba(255,255,255,0.5)' }}>
+                      <div
+                        className="px-8 py-10 text-base text-center"
+                        style={{
+                          color: 'rgba(255,255,255,0.72)',
+                          lineHeight: '1.5',
+                          minHeight: '72px',
+                          letterSpacing: '0.02em',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
                         You're all caught up.
                       </div>
                     )}
@@ -214,7 +224,7 @@ export function Navigation({
                       return (
                         <div
                           key={note.id}
-                          className={`px-4 py-2 flex items-center gap-2 transition-colors duration-200 hover:bg-white/2 ${!isLast ? 'border-b' : ''}`}
+                          className={`px-6 py-3 flex items-center gap-3 notification-item ${!isLast ? 'border-b' : ''}`}
                           style={{
                             borderColor: 'rgba(255, 255, 255, 0.03)',
                             background: note.unread ? 'rgba(198, 167, 0, 0.02)' : 'transparent',
@@ -222,7 +232,7 @@ export function Navigation({
                         >
                           <div className="flex-1 min-w-0">
                             <p
-                              className="text-xs font-semibold truncate"
+                              className="text-sm font-semibold truncate"
                               style={{
                                 color: isSystemNotification ? 'rgba(198, 167, 0, 0.95)' : '#e0e0e0',
                                 letterSpacing: '-0.01em',
@@ -230,7 +240,7 @@ export function Navigation({
                             >
                               {note.title}
                             </p>
-                            <p className="text-[0.7rem] truncate" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                            <p className="text-[0.72rem] notification-message" style={{ color: 'rgba(255,255,255,0.55)', lineHeight: '1.25rem' }}>
                               {note.message}
                             </p>
                           </div>
@@ -306,7 +316,7 @@ export function Navigation({
             const isActive = activeTab === tab.id;
             const isMyWall = tab.id === 'profile';
             const usePinkAccent = isMyWall && isPinkMode;
-            const buttonClassName = `w-full flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1.5 transition-all duration-200 hover:opacity-80 ${usePinkAccent ? pinkStyles.navPinkButton : ''}`;
+            const buttonClassName = `w-full flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1.5 nav-tab ${isActive ? 'nav-tab-active' : ''} transition-all duration-200 hover:opacity-80 ${usePinkAccent ? pinkStyles.navPinkButton : ''}`;
             const labelClassName = `${usePinkAccent ? pinkStyles.navPinkLabel : ''}`;
 
             return (
@@ -320,15 +330,17 @@ export function Navigation({
                   backgroundColor: usePinkAccent ? 'transparent' : (isActive ? 'rgba(211, 47, 47, 0.1)' : 'transparent'),
                 }}
                 className={buttonClassName}
+                aria-current={isActive ? 'page' : undefined}
               >
+                {/* indicator removed per UX: simpler left nav without left bar */}
                 <Icon
                   size={18}
                   strokeWidth={2}
                   color={usePinkAccent ? '#ffffff' : (isActive ? colors.accent : colors.text.secondary)}
-                  className="transition-colors"
+                  className={`nav-icon transition-colors ${isActive ? 'text-accent' : ''}`}
                 />
                 <span
-                  className={labelClassName}
+                  className={`${labelClassName} nav-label ${isActive ? 'nav-label-active' : ''}`}
                   style={{
                     fontSize: usePinkAccent ? '1rem' : '0.82rem',
                     color: usePinkAccent ? '#ffffff' : (isActive ? colors.accent : colors.text.secondary),
@@ -404,7 +416,7 @@ export function Navigation({
       {/* Sidebar Overlay - Desktop */}
       {sidebarOpen && (
         <div
-          className="hidden md:block fixed inset-0 bg-black/40 z-40"
+          className="hidden md:block fixed inset-0 bg-transparent z-40"
           onClick={() => setSidebarOpen(false)}
         />
       )}

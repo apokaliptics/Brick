@@ -78,7 +78,7 @@ export function UserSettingsModal({ isOpen, onClose, userName = 'User', userAvat
 
   return (
     // @ts-ignore - JSX type warnings due to missing React types
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50">
       {/* @ts-ignore */}
       <div
         className="w-full max-w-md rounded-lg p-6 relative"
