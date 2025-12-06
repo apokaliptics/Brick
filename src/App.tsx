@@ -881,6 +881,15 @@ export default function App() {
             />
             
             {/* Playlist creation moved into player */}
+            {showPlaylistCreation && (
+              <div style={{ width: '100%' }}>
+                <PlaylistCreationScreen
+                  onClose={() => setShowPlaylistCreation(false)}
+                  onPublish={handlePublishPlaylist}
+                  inline={true}
+                />
+              </div>
+            )}
           </>
         )}
         
@@ -1299,13 +1308,7 @@ export default function App() {
         />
       )}
 
-      {/* Playlist Creation Modal */}
-      {showPlaylistCreation && (
-        <PlaylistCreationScreen
-          onClose={() => setShowPlaylistCreation(false)}
-          onPublish={handlePublishPlaylist}
-        />
-      )}
+      {/* Playlist creation is now rendered inline on the Home screen when `showPlaylistCreation` is true */}
 
       {/* Connection Audit Modal */}
       {showConnectionAudit && selectedConnection && (
