@@ -1,6 +1,6 @@
 {
   "name": "Brick",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "dependencies": {
     "@jsr/supabase__supabase-js": "^2.49.8",
@@ -60,11 +60,14 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react-swc": "^3.10.2",
-    "vite": "^6.4.1"
+    "vite": "^6.4.1",
+    "concurrently": "^8.2.0"
   },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "dev:server": "node server/index.js",
+    "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
     "tauri": "tauri",
     "tauri-dev": "npm run dev & npm run tauri dev",
     "tauri-build": "npm run build && npm run tauri build"

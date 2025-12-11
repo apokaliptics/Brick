@@ -7,7 +7,6 @@ import type { Track } from '../../types';
 interface PlaylistCreationScreenProps {
   onClose: () => void;
   onPublish: (name: string, tracks: Track[]) => void;
-  inline?: boolean;
 }
 
 interface LocalTrack {
@@ -23,11 +22,11 @@ interface LocalTrack {
   genre?: string;
   bitDepth?: number;
   sampleRate?: number;
-  bitrate?: number;
-  codec?: string;
+  bitrateKbps?: number;
+  codecLabel?: string;
 }
 
-export function PlaylistCreationScreen({ onClose, onPublish, inline = false }: PlaylistCreationScreenProps) {
+export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationScreenProps) {
   const [playlistName, setPlaylistName] = useState('');
   const [tracks, setTracks] = useState<Track[]>([]);
   const [structuralIntegrity, setStructuralIntegrity] = useState(0);
@@ -283,8 +282,8 @@ export function PlaylistCreationScreen({ onClose, onPublish, inline = false }: P
       genre: localTrack.genre, // Pass through genre from local track
       bitDepth: localTrack.bitDepth,
       sampleRate: localTrack.sampleRate,
-      bitrate: localTrack.bitrate ?? (localTrack as any).bitrateKbps,
-      codec: localTrack.codec ?? (localTrack as any).codecLabel ?? localTrack.format,
+      bitrateKbps: localTrack.bitrateKbps,
+      codecLabel: localTrack.codecLabel,
       file: localTrack.file,
     };
     
@@ -392,10 +391,10 @@ export function PlaylistCreationScreen({ onClose, onPublish, inline = false }: P
   }, [playlistName, tracks, structuralIntegrity, canPublish]);
 
   return (
-    <div className={inline ? 'w-full max-w-4xl mx-auto my-6' : 'fixed inset-0 z-50 bg-[#1a1a1a] overflow-y-auto pb-24'}>
+    <div className="fixed inset-0 z-50 bg-[#1a1a1a] overflow-y-auto pb-24">
       {/* Header */}
       <div
-        className={inline ? 'px-6 py-4 border-b border-[#333333] rounded-t-xl' : 'sticky top-0 z-10 px-6 py-4 border-b border-[#333333]'}
+        className="sticky top-0 z-10 px-6 py-4 border-b border-[#333333]"
         style={{
           backgroundColor: '#252525',
           backdropFilter: 'blur(20px)',
@@ -410,7 +409,7 @@ export function PlaylistCreationScreen({ onClose, onPublish, inline = false }: P
         </div>
       </div>
 
-      <div className={inline ? 'px-6 pt-6 pb-6 bg-[#1a1a1a] rounded-b-xl shadow-lg' : 'px-6 pt-6'}>
+      <div className="px-6 pt-6">
         {/* Brick Name Input */}
         <div className="mb-6">
           <label className="mono mb-2 block" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
@@ -523,10 +522,10 @@ export function PlaylistCreationScreen({ onClose, onPublish, inline = false }: P
                 >
                   <GripVertical size={16} color="#a0a0a0" className="cursor-grab flex-shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <p className="truncate" style={{ color: '#e0e0e0', fontSize: '0.875rem', fontFamily: '"Chakra Petch", "Syne", sans-serif', fontWeight: 600 }}>
+                    <p className="truncate" style={{ color: '#e0e0e0', fontSize: '0.875rem' }}>
                       {track.title}
                     </p>
-                    <p className="truncate" style={{ color: '#a0a0a0', fontSize: '0.7rem', fontFamily: '"Chakra Petch", "Syne", sans-serif' }}>
+                    <p className="mono truncate" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>
                       {track.artist} • {track.duration} {track.genre && <span style={{ color: '#546e7a' }}>• {track.genre}</span>}
                     </p>
                   </div>
@@ -719,10 +718,10 @@ export function PlaylistCreationScreen({ onClose, onPublish, inline = false }: P
                         className="w-12 h-12 rounded object-cover"
                       />
                       <div className="flex-1 min-w-0">
-                        <p className="truncate" style={{ color: '#e0e0e0', fontFamily: '"Chakra Petch", "Syne", sans-serif', fontWeight: 600 }}>
+                        <p className="truncate" style={{ color: '#e0e0e0' }}>
                           {track.name}
                         </p>
-                        <p className="truncate" style={{ color: '#a0a0a0', fontSize: '0.75rem', fontFamily: '"Chakra Petch", "Syne", sans-serif' }}>
+                        <p className="mono truncate" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
                           {track.artist} {track.genre && <span style={{ color: '#546e7a' }}>• {track.genre}</span>}
                         </p>
                       </div>
