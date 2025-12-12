@@ -115,6 +115,7 @@ interface Connection {
 
 interface RadarScreenProps {
   onUserClick: (userId: string) => void;
+  onTrackClick?: (track: any, playlist: any[]) => void;
 }
 
 // --- Audio Player Component ---
@@ -288,7 +289,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ currentTrack, colors }) => {
 
 // --- Main RadarScreen Component ---
 
-export function RadarScreen({ onUserClick }: RadarScreenProps) {
+export function RadarScreen({ onUserClick, onTrackClick }: RadarScreenProps) {
   const { colors } = useTheme();
   const [selectedUser, setSelectedUser] = useState<Connection | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -604,7 +605,10 @@ export function RadarScreen({ onUserClick }: RadarScreenProps) {
                     // Replaced <a> tag with div and onClick handler
                     <div 
                       key={track.id}
-                      onClick={() => setCurrentTrack(track)} // Set the current track to trigger the player
+                      onClick={() => {
+                        setCurrentTrack(track); // Set the current track to trigger the player
+                        if (typeof onTrackClick === 'function') onTrackClick(track, musicSearchResults.tracks);
+                      }}
                       className="block p-3 rounded-lg transition-all hover:bg-[#333333] cursor-pointer active:scale-[0.99]"
                       style={{ backgroundColor: '#252525', border: '1px solid #333333' }}
                     >

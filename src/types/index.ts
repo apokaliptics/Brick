@@ -59,7 +59,9 @@ export interface Track {
   bitDepth?: number;
   sampleRate?: number;
   bitrateKbps?: number;
+  bitrate?: number; // Allow both bitrate (kbps) and bitrateKbps for legacy
   codecLabel?: string;
+  codec?: string; // Simple codec field
   file?: File;
   filePath?: string;
 }

@@ -776,7 +776,7 @@ export default function App() {
     return Math.max(0, Math.round(finalScore));
   };
 
-  const handleFilterChange = (filter: 'all' | 'payroll' | 'network' | 'recent') => {
+  const handleFilterChange = (filter: 'all' | 'payroll' | 'network' | 'recent' | 'feed') => {
     setHomeFilter(filter);
   };
 

@@ -681,6 +681,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
         invalidateWallSession: wallTracker.invalidateSession,
         wallSessionCount: wallTracker.consecutiveTracks,
         usingHtmlAudio,
+        getAnalyserNode: () => gaplessEngineRef.current?.getAnalyserNode?.() || null,
       });
     }
   }, [

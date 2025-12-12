@@ -1,7 +1,9 @@
 // Type declaration for jsmediatags library loaded via CDN
 // Remove reliance on window.jsmediatags (CDN) for app builds
 
-import { Upload, Music, Trash2, Play, Pause, Album, ListMusic, FolderOpen } from 'lucide-react';
+import { Upload, Music, Trash2, Play, Pause, Album, ListMusic, FolderOpen, Cloud } from 'lucide-react';
+import { parseRemoteMetadataFromUrl } from '../utils/cloudMetadata';
+import { generateCodeVerifier, generateCodeChallenge, buildGoogleAuthUrl, exchangeGoogleCodeForToken, buildMicrosoftAuthUrl, exchangeMicrosoftCodeForToken, refreshGoogleAccessToken, refreshMicrosoftAccessToken } from '../utils/cloudAuth';
 import { useState, useRef, useEffect } from 'react';
 import { openBrickDB } from '../utils/db';
 // Import jsmediatags via UMD bundle to satisfy Vite/Tauri resolver
@@ -25,13 +27,45 @@ interface LocalTrack {
   size: number;
   coverArt?: string; // Base64 encoded image
   bitDepth?: number;
-  sampleRate?: number; // kHz
-  codecLabel?: string;
-  bitrateKbps?: number;
+  sampleRate?: number; // Hz (when available)
+  codec?: string;
+  bitrate?: number;
   duration?: number;
   url?: string;
+  audioUrl?: string;
   isLong?: boolean;
+  type: 'local';
 }
+
+interface CloudTrack {
+  id: string;
+  name: string;
+  artist: string;
+  album: string;
+  albumArtist?: string;
+  year?: string;
+  trackNumber?: number;
+  discNumber?: number;
+  genre?: string;
+  addedAt: number;
+  fileId: string; // Google Drive or OneDrive file ID
+  accessToken: string; // OAuth access token
+  provider: 'google' | 'onedrive';
+  format: string;
+  size: number;
+  coverArt?: string; // Base64 encoded image (lazy loaded)
+  bitDepth?: number;
+  sampleRate?: number;
+  codec?: string;
+  bitrate?: number;
+  duration?: number;
+  url?: string; // Lazy loaded
+  audioUrl?: string; // direct download link or signed url
+  isLong?: boolean;
+  type: 'cloud';
+}
+
+type Track = LocalTrack | CloudTrack;
 
 // Long-track guardrail to prevent memory/CPU spikes (e.g., 20+ minute Pink Floyd cuts)
 const LONG_TRACK_SECONDS = 600; // 10 minutes
@@ -163,9 +197,25 @@ const deriveFromFilename = (name: string): { artist?: string; album?: string; ti
   return { title: removeTrackNumberPrefix(base) };
 };
 
+interface GoogleDriveFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size?: string;
+  thumbnailLink?: string;
+}
+
+interface OneDriveItem {
+  id: string;
+  name: string;
+  size?: number;
+  folder?: { childCount?: number };
+  file?: { mimeType?: string };
+}
+
 interface LocalMusicUploaderProps {
-  onPlayTrack: (track: LocalTrack) => void;
-  onPlayAlbum?: (tracks: LocalTrack[]) => void;
+  onPlayTrack: (track: Track) => void;
+  onPlayAlbum?: (tracks: Track[]) => void;
   currentPlayingId?: string;
   isPlaying?: boolean;
 }
@@ -226,20 +276,39 @@ const deleteTrackFromDB = async (id: string): Promise<void> => {
   });
 };
 
+const clearAllTracksInDB = async (): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.clear();
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
 export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId, isPlaying }: LocalMusicUploaderProps) {
+  const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+  const ONEDRIVE_CLIENT_ID = import.meta.env.VITE_ONEDRIVE_CLIENT_ID || '';
   const [localTracks, setLocalTracks] = useState<LocalTrack[]>([]);
+  const [cloudTracks, setCloudTracks] = useState<CloudTrack[]>([]);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [importProgress, setImportProgress] = useState<{ processed: number; total: number } | null>(null);
   const [viewMode, setViewMode] = useState<'tracks' | 'albums'>('tracks');
   const [sortMode, setSortMode] = useState<'added' | 'title' | 'artist'>('added');
   const [selectedAlbum, setSelectedAlbum] = useState<{ name: string; artist: string } | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
+  // settings dropdown removed (moved to global Settings modal)
   // Pagination state to keep UI concise with large libraries
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const playLockRef = useRef(false);
+  // settingsRef removed
   const toggleVault = () => setIsExpanded((prev) => !prev);
 
   // Load jsmediatags library
@@ -258,8 +327,9 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
           localStorage.removeItem('brick_local_tracks');
         }
 
+        // Load local tracks
         const storedTracks = await getAllTracksFromDB();
-        console.log('Retrieved tracks from IndexedDB:', storedTracks.length);
+        console.log('Retrieved local tracks from IndexedDB:', storedTracks.length);
 
         // Tracks are stored with File objects directly in IndexedDB
         const baseTimestamp = Date.now();
@@ -275,6 +345,8 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
               ...track,
               addedAt: track.addedAt ?? baseTimestamp + index,
               url,
+              audioUrl: url,
+              type: 'local' as const,
             };
           } catch (error) {
             console.error('Failed to process track:', track.id, error);
@@ -282,10 +354,26 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
           }
         }).filter(Boolean) as LocalTrack[];
 
-        console.log('Successfully loaded tracks:', tracksWithFiles.length);
+        console.log('Successfully loaded local tracks:', tracksWithFiles.length);
         setLocalTracks(tracksWithFiles);
+
+        // Load cloud tracks
+        const db = await openBrickDB();
+        const cloudTransaction = db.transaction(['cloudTracks'], 'readonly');
+        const cloudStore = cloudTransaction.objectStore('cloudTracks');
+        const cloudRequest = cloudStore.getAll();
+
+        cloudRequest.onsuccess = () => {
+          const loadedCloudTracks = cloudRequest.result.map(track => ({
+            ...track,
+            type: 'cloud' as const,
+          }));
+          console.log('Successfully loaded cloud tracks:', loadedCloudTracks.length);
+          setCloudTracks(loadedCloudTracks);
+        };
+
       } catch (error) {
-        console.error('Error loading local tracks from IndexedDB:', error);
+        console.error('Error loading tracks from IndexedDB:', error);
       } finally {
         setIsLoading(false);
       }
@@ -296,11 +384,35 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
     // Cleanup: revoke blob URLs when component unmounts
     return () => {
       localTracks.forEach(track => {
-        if (track.url?.startsWith('blob:')) {
-          URL.revokeObjectURL(track.url);
+        const blob = track.audioUrl ?? track.url;
+        if (blob?.startsWith('blob:')) {
+          URL.revokeObjectURL(blob);
         }
       });
     };
+  }, []);
+
+  // Refresh local track UI when metadata repair or other DB refresh occurs
+  useEffect(() => {
+    const handler = (e: Event) => {
+      try {
+        const detail = (e as CustomEvent).detail;
+        if (detail?.tracks) {
+          setLocalTracks(detail.tracks);
+        } else {
+          (async () => {
+            try {
+              const stored = await getAllTracksFromDB();
+              const baseTimestamp = Date.now();
+              const tracksWithFiles: LocalTrack[] = stored.map((track, idx) => ({ ...track, url: track.url || (track.file ? URL.createObjectURL(track.file) : ''), audioUrl: track.audioUrl || (track.file ? URL.createObjectURL(track.file) : ''), addedAt: track.addedAt ?? baseTimestamp + idx }));
+              setLocalTracks(tracksWithFiles);
+            } catch {}
+          })();
+        }
+      } catch (err) { /* noop */ }
+    };
+    window.addEventListener('brick:local-tracks-refreshed', handler as EventListener);
+    return () => window.removeEventListener('brick:local-tracks-refreshed', handler as EventListener);
   }, []);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -430,20 +542,6 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
       audio.preload = 'metadata';
       audio.src = url;
 
-      // Extract technical metadata (bit depth, sample rate, bitrate)
-      let bitDepth: number | undefined;
-      let sampleRate: number | undefined;
-      let bitrateKbps: number | undefined;
-      let codecLabel: string | undefined;
-      try {
-        const { extractAudioMeta } = await import('../utils/audioMetadata');
-        const tech = await withTimeout(extractAudioMeta(file), 8000, {} as any);
-        bitDepth = tech.bitDepth;
-        sampleRate = tech.sampleRate;
-        bitrateKbps = tech.bitrateKbps;
-        codecLabel = tech.codecLabel;
-      } catch {}
-
       await new Promise((resolve) => {
         const finalize = () => {
           const tags = (mmTags?.tags || metadata?.tags || {}) as Record<string, any>;
@@ -498,11 +596,9 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
             format,
             size: file.size,
             coverArt,
-            bitDepth,
-            sampleRate,
-            bitrateKbps,
-            codecLabel: codecLabel || format,
+            codec: format,
             isLong: isLongTrack,
+            type: 'local' as const,
           };
           newTracks.push(track);
           existingSignatures.add(signature);
@@ -568,19 +664,534 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
 
   const handleDeleteTrack = async (trackId: string) => {
     console.log('Deleting track:', trackId);
-    const track = localTracks.find(t => t.id === trackId);
-    if (track?.url && track.url.startsWith('blob:')) {
-      URL.revokeObjectURL(track.url);
+    // Try to find in localTracks
+    const local = localTracks.find(t => t.id === trackId);
+    if (local) {
+      const blob = local.audioUrl ?? local.url;
+      if (blob && blob.startsWith('blob:')) {
+        try { URL.revokeObjectURL(blob); } catch {}
+      }
+      setLocalTracks(localTracks.filter(t => t.id !== trackId));
+      try {
+        await deleteTrackFromDB(trackId);
+        console.log('Successfully deleted local track:', trackId);
+      } catch (error) {
+        console.error('Error deleting local track from IndexedDB:', error);
+      }
+      return;
     }
 
-    setLocalTracks(localTracks.filter(t => t.id !== trackId));
+    // Try to find in cloudTracks
+    const cloud = cloudTracks.find(t => t.id === trackId);
+    if (cloud) {
+      setCloudTracks(cloudTracks.filter(t => t.id !== trackId));
+      try {
+        const db = await openBrickDB();
+        const tx = db.transaction(['cloudTracks'], 'readwrite');
+        const store = tx.objectStore('cloudTracks');
+        store.delete(trackId);
+        console.log('Successfully deleted cloud track:', trackId);
+      } catch (error) {
+        console.error('Error deleting cloud track from IndexedDB:', error);
+      }
+      return;
+    }
+  };
 
-    // Delete from IndexedDB
+  const handlePlayClick = async (track: Track) => {
+    if (playLockRef.current) return;
+    playLockRef.current = true;
     try {
-      await deleteTrackFromDB(trackId);
-      console.log('Successfully deleted track:', trackId);
+      if (track.type === 'cloud') {
+        const cloudTrack = track as CloudTrack;
+        // Ensure audioUrl is resolved (and tokens refreshed) for cloud tracks
+        if (cloudTrack.fileId) {
+          await resolveAudioUrlForCloudTrack(cloudTrack);
+        }
+        // Only fetch metadata if missing
+        if ((!cloudTrack.artist || cloudTrack.artist === 'Unknown Artist') && cloudTrack.audioUrl) {
+          const parsed = await parseRemoteMetadata(cloudTrack);
+          if (parsed && parsed.tags) {
+            const tags: any = parsed.tags;
+            const artist = tags.artist || tags.TPE1 || cloudTrack.artist;
+            const title = tags.title || tags.TIT2 || cloudTrack.name;
+            const album = tags.album || tags.TALB || cloudTrack.album;
+            let coverArt: string | undefined;
+            if (tags.picture) {
+              const { data, format: imgFormat } = tags.picture;
+              let base64String = '';
+              for (let j = 0; j < data.length; j++) {
+                base64String += String.fromCharCode(data[j]);
+              }
+              coverArt = `data:${imgFormat};base64,${btoa(base64String)}`;
+            }
+            // Update cloudTrack and DB
+            cloudTrack.artist = artist || cloudTrack.artist;
+            cloudTrack.name = title || cloudTrack.name;
+            cloudTrack.album = album || cloudTrack.album;
+            if (coverArt) cloudTrack.coverArt = coverArt;
+            try {
+              const db = await openBrickDB();
+              const tx = db.transaction(['cloudTracks'], 'readwrite');
+              const store = tx.objectStore('cloudTracks');
+              store.put(cloudTrack);
+              setCloudTracks(prev => prev.map(t => t.id === cloudTrack.id ? cloudTrack : t));
+            } catch (err) {
+              console.warn('Failed to update cloud track metadata in DB:', err);
+            }
+          }
+        }
+        // audioUrl resolution already handled earlier
+      }
+      onPlayTrack(track);
+    } finally {
+      setTimeout(() => { playLockRef.current = false; }, 300);
+    }
+  };
+
+  const [cloudModalOpen, setCloudModalOpen] = useState(false);
+  const [cloudUrlInput, setCloudUrlInput] = useState('');
+
+  const handleConnectCloud = async () => {
+    // Show cloud connect modal options
+    setCloudModalOpen(true);
+  };
+  // Tokens and file listing state
+  const [driveFiles, setDriveFiles] = useState<GoogleDriveFile[]>([]);
+  const [oneDriveFiles, setOneDriveFiles] = useState<OneDriveItem[]>([]);
+  const [selectedDriveFiles, setSelectedDriveFiles] = useState<Record<string, boolean>>({});
+  const [selectedOneDriveFiles, setSelectedOneDriveFiles] = useState<Record<string, boolean>>({});
+
+  const connectGoogleDrive = async () => {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    const redirectUri = `${location.origin}/oauth_callback.html`;
+    if (!clientId) {
+      alert('VITE_GOOGLE_CLIENT_ID not set. Please configure a Google OAuth client ID in your environment variables.');
+      return;
+    }
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+    sessionStorage.setItem('gdrive_code_verifier', codeVerifier);
+    const authUrl = await buildGoogleAuthUrl({ clientId, redirectUri, codeChallenge });
+    const w = window.open(authUrl, 'google_oauth', 'width=600,height=600');
+    const listener = async (e: MessageEvent) => {
+      if (e.origin !== location.origin) return;
+      const data = e.data as any;
+      if (data && data.provider === 'google' && data.code) {
+        try {
+          const tokenResp = await exchangeGoogleCodeForToken({ code: data.code, codeVerifier, redirectUri, clientId });
+          // Compute expiry
+          const expiresAt = Date.now() + ((tokenResp.expires_in ?? 3600) * 1000);
+          const tokenToStore = { ...tokenResp, expires_at: expiresAt };
+          // Save token
+          const db = await openBrickDB();
+          const tx = db.transaction(['cloudTokens'], 'readwrite');
+          const store = tx.objectStore('cloudTokens');
+          store.put({ provider: 'google', token: tokenToStore });
+          alert('Google Drive connected');
+        } catch (err) {
+          console.error('Failed to exchange Google token', err);
+        }
+        window.removeEventListener('message', listener);
+        clearInterval(checkClosed);
+        w?.close();
+      }
+    };
+    window.addEventListener('message', listener);
+    const checkClosed = setInterval(() => {
+      try {
+        if (!w || w.closed) {
+          window.removeEventListener('message', listener);
+          clearInterval(checkClosed);
+        }
+      } catch (err) {
+        // ignore
+      }
+    }, 500);
+  };
+
+  const connectOneDrive = async () => {
+    const clientId = import.meta.env.VITE_ONEDRIVE_CLIENT_ID;
+    const redirectUri = `${location.origin}/oauth_callback.html`;
+    if (!clientId) {
+      alert('VITE_ONEDRIVE_CLIENT_ID not set. Please configure OneDrive OAuth client ID in your environment variables.');
+      return;
+    }
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+    sessionStorage.setItem('onedrive_code_verifier', codeVerifier);
+    const authUrl = await buildMicrosoftAuthUrl({ clientId, redirectUri, codeChallenge });
+    const w = window.open(authUrl, 'onedrive_oauth', 'width=600,height=600');
+    const listener = async (e: MessageEvent) => {
+      if (e.origin !== location.origin) return;
+      const data = e.data as any;
+      if (data && data.provider === 'onedrive' && data.code) {
+        try {
+          const tokenResp = await exchangeMicrosoftCodeForToken({ code: data.code, codeVerifier, redirectUri, clientId });
+          const expiresAt = Date.now() + ((tokenResp.expires_in ?? 3600) * 1000);
+          const tokenToStore = { ...tokenResp, expires_at: expiresAt };
+          // Save token
+          const db = await openBrickDB();
+          const tx = db.transaction(['cloudTokens'], 'readwrite');
+          const store = tx.objectStore('cloudTokens');
+          store.put({ provider: 'onedrive', token: tokenToStore });
+          alert('OneDrive connected');
+        } catch (err) {
+          console.error('Failed to exchange OneDrive token', err);
+        }
+        window.removeEventListener('message', listener);
+        clearInterval(checkClosed2);
+        w?.close();
+      }
+    };
+    window.addEventListener('message', listener);
+    const checkClosed2 = setInterval(() => {
+      try {
+        if (!w || w.closed) {
+          window.removeEventListener('message', listener);
+          clearInterval(checkClosed2);
+        }
+      } catch (err) {
+        // ignore
+      }
+    }, 500);
+  };
+
+  // simple getter removed; replaced with auto-refreshing getter below
+
+  const refreshCloudToken = async (provider: 'google' | 'onedrive') => {
+    try {
+      const db = await openBrickDB();
+      const tx = db.transaction(['cloudTokens'], 'readwrite');
+      const store = tx.objectStore('cloudTokens');
+      const req = store.get(provider);
+      const tokenObj: any = await new Promise((resolve) => {
+        req.onsuccess = () => resolve(req.result?.token);
+        req.onerror = () => resolve(null);
+      });
+      if (!tokenObj || !tokenObj.refresh_token) return null;
+
+      let refreshed: any = null;
+      if (provider === 'google') {
+        const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+        if (!clientId) throw new Error('Missing Google client id');
+        refreshed = await refreshGoogleAccessToken({ refreshToken: tokenObj.refresh_token, clientId });
+      } else {
+        const clientId = import.meta.env.VITE_ONEDRIVE_CLIENT_ID;
+        if (!clientId) throw new Error('Missing OneDrive client id');
+        refreshed = await refreshMicrosoftAccessToken({ refreshToken: tokenObj.refresh_token, clientId });
+      }
+      if (refreshed) {
+        const expiresAt = Date.now() + ((refreshed.expires_in ?? 3600) * 1000);
+        const merged = { ...tokenObj, ...refreshed, expires_at: expiresAt };
+        store.put({ provider, token: merged });
+        return merged;
+      }
+      return null;
+    } catch (err) {
+      console.warn('Failed refreshing cloud token', err);
+      return null;
+    }
+  };
+
+  // getCloudToken auto-refreshes when token is near expiry
+  const getCloudToken = async (provider: 'google' | 'onedrive') => {
+    const db = await openBrickDB();
+    const tx = db.transaction(['cloudTokens'], 'readonly');
+    const store = tx.objectStore('cloudTokens');
+    const tokenObj: any = await new Promise((resolve) => {
+      const req = store.get(provider);
+      req.onsuccess = () => resolve(req.result?.token);
+      req.onerror = () => resolve(null);
+    });
+    if (!tokenObj) return null;
+    const now = Date.now();
+    // If token is near expiry (within 60 seconds), attempt refresh
+    if (tokenObj.expires_at && (now > tokenObj.expires_at - 60000)) {
+      const refreshed = await refreshCloudToken(provider);
+      return refreshed ?? tokenObj;
+    }
+    return tokenObj;
+  };
+
+  const listDriveFiles = async () => {
+    const token = await getCloudToken('google');
+    if (!token?.access_token) {
+      alert('No Google Drive token found. Please connect first.');
+      return;
+    }
+    try {
+      // List both audio files and folders
+      let resp = await fetch(`https://www.googleapis.com/drive/v3/files?q=(mimeType contains 'audio' or mimeType = 'application/vnd.google-apps.folder') and trashed=false&fields=files(id,name,mimeType,size,thumbnailLink)`, { headers: { Authorization: `Bearer ${token.access_token}` } });
+      if (resp.status === 401) {
+        const refreshed = await refreshCloudToken('google');
+        if (refreshed?.access_token) {
+          resp = await fetch(`https://www.googleapis.com/drive/v3/files?q=(mimeType contains 'audio' or mimeType = 'application/vnd.google-apps.folder') and trashed=false&fields=files(id,name,mimeType,size,thumbnailLink)`, { headers: { Authorization: `Bearer ${refreshed.access_token}` } });
+        }
+      }
+      const json = await resp.json();
+      setDriveFiles(json.files || []);
+    } catch (err) {
+      console.error('Failed to list Drive files', err);
+    }
+  };
+
+  const disconnectGoogleDrive = async () => {
+    try {
+      const db = await openBrickDB();
+      const tx = db.transaction(['cloudTokens'], 'readwrite');
+      const store = tx.objectStore('cloudTokens');
+      store.delete('google');
+      alert('Disconnected Google Drive');
+    } catch (err) {
+      console.warn('Failed to disconnect Google Drive', err);
+    }
+  };
+
+  const listOneDriveFiles = async () => {
+    const token = await getCloudToken('onedrive');
+    if (!token?.access_token) {
+      alert('No OneDrive token found. Please connect first.');
+      return;
+    }
+    try {
+      // List children of root, then filter for audio files and folders
+      let resp = await fetch(`https://graph.microsoft.com/v1.0/me/drive/root/children?$select=id,name,size,folder,file`, { headers: { Authorization: `Bearer ${token.access_token}` } });
+      if (resp.status === 401) {
+        const refreshed = await refreshCloudToken('onedrive');
+        if (refreshed?.access_token) {
+          resp = await fetch(`https://graph.microsoft.com/v1.0/me/drive/root/children?$select=id,name,size,folder,file`, { headers: { Authorization: `Bearer ${refreshed.access_token}` } });
+        }
+      }
+      const json = await resp.json();
+      // Filter for audio files and folders
+      const filtered = (json.value || []).filter((item: any) => {
+        if (item.folder) return true; // include folders
+        if (item.file && item.file.mimeType && item.file.mimeType.startsWith('audio/')) return true;
+        return false;
+      });
+      setOneDriveFiles(filtered);
+    } catch (err) {
+      console.error('Failed to list OneDrive files', err);
+    }
+  };
+
+  const disconnectOneDrive = async () => {
+    try {
+      const db = await openBrickDB();
+      const tx = db.transaction(['cloudTokens'], 'readwrite');
+      const store = tx.objectStore('cloudTokens');
+      store.delete('onedrive');
+      alert('Disconnected OneDrive');
+    } catch (err) {
+      console.warn('Failed to disconnect OneDrive', err);
+    }
+  };
+
+  const importSelectedDriveFiles = async () => {
+    const selectedIds = Object.keys(selectedDriveFiles).filter(k => selectedDriveFiles[k]);
+    if (!selectedIds.length) return;
+    const token = await getCloudToken('google');
+    const toImport: CloudTrack[] = selectedIds.map(id => {
+      const f = driveFiles.find((d) => d.id === id);
+      return ({
+        id: `gdrive-${id}`,
+        name: f?.name || id,
+        artist: 'Unknown Artist',
+        album: 'Unknown Album',
+        addedAt: Date.now(),
+        fileId: id,
+        accessToken: token?.access_token || '',
+        provider: 'google',
+        format: f?.mimeType?.split('/')?.pop()?.toUpperCase() || 'MP3',
+        size: f?.size ? Number(f.size) : 0,
+        audioUrl: `http://localhost:4000/api/cloud/audio?provider=google&fileId=${id}&accessToken=${encodeURIComponent(token?.access_token || '')}`,
+        type: 'cloud',
+      });
+    });
+    try {
+      const db = await openBrickDB();
+      const tx = db.transaction(['cloudTracks'], 'readwrite');
+      const store = tx.objectStore('cloudTracks');
+      for (const t of toImport) store.put(t);
+      setCloudTracks(prev => [...prev, ...toImport]);
+      setDriveFiles([]);
+      setSelectedDriveFiles({});
+    } catch (err) {
+      console.error('Failed to import Drive files', err);
+    }
+  };
+
+  const importSelectedOneDriveFiles = async () => {
+    const selectedIds = Object.keys(selectedOneDriveFiles).filter(k => selectedOneDriveFiles[k]);
+    if (!selectedIds.length) return;
+    const token = await getCloudToken('onedrive');
+    const toImport: CloudTrack[] = selectedIds.map(id => {
+      const f = oneDriveFiles.find((d) => d.id === id);
+      return ({
+        id: `onedrive-${id}`,
+        name: f?.name || id,
+        artist: 'Unknown Artist',
+        album: 'Unknown Album',
+        addedAt: Date.now(),
+        fileId: id,
+        accessToken: token?.access_token || '',
+        provider: 'onedrive',
+        format: f?.file?.mimeType?.split('/')?.pop()?.toUpperCase() || 'MP3',
+        size: f?.size || 0,
+        audioUrl: `http://localhost:4000/api/cloud/audio?provider=onedrive&fileId=${id}&accessToken=${encodeURIComponent(token?.access_token || '')}`,
+        type: 'cloud',
+      });
+    });
+    try {
+      const db = await openBrickDB();
+      const tx = db.transaction(['cloudTracks'], 'readwrite');
+      const store = tx.objectStore('cloudTracks');
+      for (const t of toImport) store.put(t);
+      setCloudTracks(prev => [...prev, ...toImport]);
+      setOneDriveFiles([]);
+      setSelectedOneDriveFiles({});
+    } catch (err) {
+      console.error('Failed to import OneDrive files', err);
+    }
+  };
+
+  const addCloudTrackFromUrl = async (url: string) => {
+    if (!url) return;
+    try {
+      let name = url.split('/').pop() || url;
+      // try to strip query string
+      name = name.split('?')[0];
+      const { title, artist, album } = deriveFromFilename(name);
+      const extension = name.split('.').pop() || '';
+      const format = extension.toUpperCase();
+
+      // Detect cloud provider URLs
+      let provider: 'google' | 'onedrive' = 'google';
+      let fileId = url;
+      let isCloudProvider = false;
+
+      if (url.includes('drive.google.com')) {
+        provider = 'google';
+        let match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+        if (!match) match = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+        if (match) {
+          fileId = match[1];
+          isCloudProvider = true;
+        }
+      } else if (url.includes('onedrive.live.com') || url.includes('sharepoint.com') || url.includes('1drv.ms')) {
+        provider = 'onedrive';
+        const urlObj = new URL(url);
+        const id = urlObj.searchParams.get('id') || urlObj.searchParams.get('resid');
+        if (id) {
+          fileId = id;
+          isCloudProvider = true;
+        }
+      }
+
+      // For cloud providers, check if connected
+      if (isCloudProvider) {
+        const token = await getCloudToken(provider);
+        if (!token?.access_token) {
+          alert(`Please connect your ${provider === 'google' ? 'Google Drive' : 'OneDrive'} account first before importing URLs.`);
+          return;
+        }
+      }
+
+      const newTrack: CloudTrack = {
+        id: `cloud-${Date.now()}`,
+        name: title || name,
+        artist: artist || 'Unknown Artist',
+        album: album || 'Unknown Album',
+        addedAt: Date.now(),
+        fileId,
+        audioUrl: isCloudProvider ? '' : url, // For cloud providers, resolve later
+        accessToken: '',
+        provider,
+        format,
+        size: 0, // Size unknown for URLs
+        type: 'cloud',
+      };
+
+      const db = await openBrickDB();
+      const tx = db.transaction(['cloudTracks'], 'readwrite');
+      const store = tx.objectStore('cloudTracks');
+      store.put(newTrack);
+      setCloudTracks(prev => [...prev, newTrack]);
+      setCloudModalOpen(false);
+      setCloudUrlInput('');
     } catch (error) {
-      console.error('Error deleting track from IndexedDB:', error);
+      console.error('Error adding cloud track from URL:', error);
+    }
+  };
+
+  const resolveAudioUrlForCloudTrack = async (track: CloudTrack) => {
+    try {
+      // If fileId is a full public URL, use it directly
+      if (typeof track.fileId === 'string' && (track.fileId.startsWith('http://') || track.fileId.startsWith('https://'))) {
+        track.audioUrl = track.fileId;
+        const db = await openBrickDB();
+        const tx = db.transaction(['cloudTracks'], 'readwrite');
+        const store = tx.objectStore('cloudTracks');
+        store.put(track);
+        setCloudTracks(prev => prev.map(t => t.id === track.id ? track : t));
+        return track.audioUrl;
+      }
+      const token = await getCloudToken(track.provider);
+      if (!token?.access_token) throw new Error('No token');
+      // Use local proxy to avoid CORS
+      const proxyUrl = `http://localhost:4000/api/cloud/audio?provider=${track.provider}&fileId=${track.fileId}&accessToken=${encodeURIComponent(token.access_token)}`;
+      // Update DB with audioUrl
+      track.audioUrl = proxyUrl;
+      track.accessToken = token.access_token;
+      const db = await openBrickDB();
+      const tx = db.transaction(['cloudTracks'], 'readwrite');
+      const store = tx.objectStore('cloudTracks');
+      store.put(track);
+      setCloudTracks(prev => prev.map(t => t.id === track.id ? track : t));
+      return proxyUrl;
+    } catch (err) {
+      console.warn('Failed to resolve audio url for cloud track:', err);
+      return null;
+    }
+  };
+
+  const parseRemoteMetadata = async (track: CloudTrack) => {
+    if (!track.audioUrl) return null;
+    return await parseRemoteMetadataFromUrl(track.audioUrl, track.name);
+  };
+
+  const handleDeleteAllTracks = () => {
+    setDeleteConfirmation('');
+    setIsDeleteModalOpen(true);
+  };
+
+  const executeDeleteAllTracks = async () => {
+    const phrase = deleteConfirmation.trim().toUpperCase();
+    if (phrase !== 'DELETE') return;
+
+    try {
+      setIsDeletingAll(true);
+
+      // Revoke existing blob URLs to free memory
+      localTracks.forEach((track) => {
+        const blob = (track as LocalTrack).audioUrl ?? (track as LocalTrack).url;
+        if (blob && blob.startsWith('blob:')) {
+          try {
+            URL.revokeObjectURL(blob);
+          } catch {}
+        }
+      });
+
+      setLocalTracks([]);
+      await clearAllTracksInDB();
+      console.log('All local tracks deleted from vault');
+      setIsDeleteModalOpen(false);
+    } catch (error) {
+      console.error('Failed to delete all local tracks:', error);
+    } finally {
+      setIsDeletingAll(false);
+      setDeleteConfirmation('');
     }
   };
 
@@ -590,6 +1201,12 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const formatBitrate = (bitrate?: number) => {
+    if (!bitrate) return undefined;
+    const kbps = bitrate > 1000 ? Math.round(bitrate / 1000) : Math.round(bitrate);
+    return `${kbps} kbps`;
+  };
+
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024 * 1024) {
       return `${(bytes / 1024).toFixed(1)} KB`;
@@ -597,15 +1214,23 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const getTechBadge = (track: LocalTrack) => {
+    const codec = track.codec || track.format;
+    const bitrate = formatBitrate(track.bitrate);
+    if (codec && bitrate) return `${String(codec).toUpperCase()} / ${bitrate}`;
+    if (codec) return String(codec).toUpperCase();
+    return bitrate ?? 'AUDIO';
+  };
+
   // Group tracks by album
-  const albumGroups = localTracks.reduce((acc, track) => {
+  const albumGroups = [...localTracks, ...cloudTracks].reduce((acc, track) => {
     const albumKey = `${track.album}:::${track.albumArtist || track.artist}`;
     if (!acc[albumKey]) {
       acc[albumKey] = [];
     }
     acc[albumKey].push(track);
     return acc;
-  }, {} as Record<string, LocalTrack[]>);
+  }, {} as Record<string, Track[]>);
 
   // Sort tracks within each album by disc number first, then track number
   Object.keys(albumGroups).forEach(albumKey => {
@@ -643,7 +1268,9 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
   // Reset pagination on key view state changes
   useEffect(() => {
     setPage(1);
-  }, [viewMode, sortMode, selectedAlbum, localTracks.length]);
+  }, [viewMode, sortMode, selectedAlbum, localTracks.length, cloudTracks.length]);
+
+  // (settings dropdown removed) 
 
   return (
     <div
@@ -679,11 +1306,11 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
             <Music size={20} color="#d32f2f" />
           </div>
           <div>
-            <h3 className="mono local-vault-title" style={{ color: '#e0e0e0' }}>
-              Local Vault
+            <h3 className="local-vault-title" style={{ color: '#e0e0e0', fontFamily: '"Chakra Petch", "Syne", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontWeight: 700, fontSize: '1.125rem' }}>
+              <strong>Local Vault</strong>
             </h3>
-            <p className="mono local-vault-meta" style={{ color: '#a0a0a0' }}>
-              {localTracks.length} {localTracks.length === 1 ? 'track' : 'tracks'} • Private only
+            <p className="local-vault-meta mono" style={{ color: '#a0a0a0' }}>
+              {localTracks.length + cloudTracks.length} {localTracks.length + cloudTracks.length === 1 ? 'track' : 'tracks'} • {localTracks.length} local, {cloudTracks.length} cloud
             </p>
           </div>
         </div>
@@ -691,57 +1318,160 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
         <div className="local-vault-indicator" aria-hidden="true" />
 
         {/* Upload Buttons */}
-        <div className="flex items-center local-vault-actions">
+        <div className="flex items-center gap-2 local-vault-actions flex-nowrap" style={{ alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', maxWidth: '220px', margin: '0 auto' }}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                fileInputRef.current?.click();
+              }}
+              className="flex-shrink-0 rounded-lg transition-all duration-200 hover:scale-110"
+              style={{
+                width: '34px',
+                height: '34px',
+                minWidth: '34px',
+                padding: 0,
+                background: 'linear-gradient(120deg, rgba(211, 47, 47, 0.2), rgba(211, 47, 47, 0.32))',
+                border: '1px solid #ff5f6d',
+                boxShadow: '0 0 0 1px rgba(255, 95, 109, 0.25)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              title="Import Tracks"
+            >
+              <Upload size={14} color="#ff5f6d" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                folderInputRef.current?.click();
+              }}
+              className="flex-shrink-0 rounded-lg transition-all duration-200 hover:scale-110"
+              style={{
+                width: '34px',
+                height: '34px',
+                minWidth: '34px',
+                padding: 0,
+                backgroundColor: 'rgba(211, 47, 47, 0.15)',
+                border: '1px solid #d32f2f',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              title="Import Folder (preserves artist/album path)"
+            >
+              <FolderOpen size={14} color="#d32f2f" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleConnectCloud();
+              }}
+              disabled={!GOOGLE_CLIENT_ID && !ONEDRIVE_CLIENT_ID}
+              className={`flex-shrink-0 rounded-lg transition-all duration-200 hover:scale-110 ${(!GOOGLE_CLIENT_ID && !ONEDRIVE_CLIENT_ID) ? 'opacity-50 cursor-not-allowed' : ''}`}
+              style={{
+                width: '34px',
+                height: '34px',
+                minWidth: '34px',
+                padding: 0,
+                backgroundColor: 'rgba(0, 188, 212, 0.15)',
+                border: '1px solid #00bcd4',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              title={!GOOGLE_CLIENT_ID && !ONEDRIVE_CLIENT_ID ? 'Configure VITE_GOOGLE_CLIENT_ID or VITE_ONEDRIVE_CLIENT_ID in .env.local' : 'Connect Cloud Storage'}
+            >
+              <Cloud size={14} color="#00bcd4" />
+            </button>
+              {/* Repair Metadata moved to global Settings — dropdown removed */}
           <button
             onClick={(e) => {
               e.stopPropagation();
-              fileInputRef.current?.click();
+              handleDeleteAllTracks();
             }}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 hover:scale-105"
+            className="flex-shrink-0 rounded-lg transition-all duration-200 hover:scale-110"
             style={{
-              backgroundColor: 'rgba(211, 47, 47, 0.15)',
-              border: '1px solid #d32f2f',
+              marginLeft: 0,
+              width: '34px',
+              height: '34px',
+              minWidth: '34px',
+              padding: 0,
+              backgroundColor: 'transparent',
+              border: '1px solid #ff1744',
+              color: '#ff1744',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
+            title="Delete all local tracks (requires typed confirmation)"
           >
-            <Upload size={16} color="#d32f2f" />
-            <span className="mono" style={{ color: '#d32f2f', fontSize: '0.8rem' }}>
-              Import
-            </span>
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              folderInputRef.current?.click();
-            }}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 hover:scale-105"
-            style={{
-              backgroundColor: 'rgba(211, 47, 47, 0.15)',
-              border: '1px solid #d32f2f',
-            }}
-            title="Import Folder (preserves artist/album path)"
-          >
-            <FolderOpen size={16} color="#d32f2f" />
-            <span className="mono" style={{ color: '#d32f2f', fontSize: '0.8rem' }}>
-              Import Folder
-            </span>
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              repairMetadata();
-            }}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 hover:scale-105"
-            style={{
-              backgroundColor: 'rgba(255, 255, 255, 0.08)',
-              border: '1px solid rgba(255, 255, 255, 0.12)',
-            }}
-            title="Repair metadata from filenames"
-          >
-            <span className="mono" style={{ color: '#e0e0e0', fontSize: '0.8rem' }}>
-              Repair Metadata
-            </span>
+            <Trash2 size={14} color="#ff1744" />
           </button>
         </div>
+
+        {/* Cloud Import Modal */}
+        {cloudModalOpen && (
+          <div className="fixed inset-0 z-40 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/60" onClick={() => setCloudModalOpen(false)} />
+            <div className="relative z-50 w-full max-w-2xl p-4 rounded bg-[#252525] border" style={{ borderColor: '#333' }}>
+              <h4 className="mono mb-2" style={{ color: '#fff' }}>Cloud Connector</h4>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div>
+                  <p className="mono text-sm text-gray-400 mb-2">Paste a public URL to an audio file (eg. direct link to .flac/.mp3)</p>
+                  <input value={cloudUrlInput} onChange={(e) => setCloudUrlInput(e.target.value)} placeholder="https://..." className="w-full p-2 mb-2 rounded bg-[#1b1b1b] border" style={{ borderColor: '#333', color: '#fff' }} />
+                  <div className="flex items-center justify-end gap-2">
+                    <button onClick={() => setCloudModalOpen(false)} className="px-3 py-1 rounded bg-transparent border text-gray-400" style={{ borderColor: '#333' }}>Cancel</button>
+                    <button onClick={() => addCloudTrackFromUrl(cloudUrlInput)} className="px-3 py-1 rounded bg-cyan-600 text-white">Add Track</button>
+                  </div>
+                </div>
+                <div>
+                  <p className="mono text-sm text-gray-400 mb-2">Cloud Services</p>
+                  <div className="flex items-center gap-2 mb-2">
+                    <button onClick={connectGoogleDrive} disabled={!GOOGLE_CLIENT_ID} className={`px-3 py-1 rounded bg-[#1a73e8] text-white ${!GOOGLE_CLIENT_ID ? 'opacity-50 cursor-not-allowed' : ''}`} title={!GOOGLE_CLIENT_ID ? 'VITE_GOOGLE_CLIENT_ID not set. Add to .env.local' : 'Connect Google Drive'}>Connect Google Drive</button>
+                    <button onClick={listDriveFiles} className="px-3 py-1 rounded bg-[#0f1720] text-white border" style={{ borderColor: '#333' }}>List Files</button>
+                    <button onClick={importSelectedDriveFiles} className="px-3 py-1 rounded bg-[#00bcd4] text-white">Import Selected</button>
+                    <button onClick={disconnectGoogleDrive} className="px-3 py-1 rounded bg-transparent border text-gray-400" style={{ borderColor: '#333' }}>Disconnect</button>
+                  </div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <button onClick={connectOneDrive} disabled={!ONEDRIVE_CLIENT_ID} className={`px-3 py-1 rounded bg-[#4f8ef7] text-white ${!ONEDRIVE_CLIENT_ID ? 'opacity-50 cursor-not-allowed' : ''}`} title={!ONEDRIVE_CLIENT_ID ? 'VITE_ONEDRIVE_CLIENT_ID not set. Add to .env.local' : 'Connect OneDrive'}>Connect OneDrive</button>
+                    <button onClick={listOneDriveFiles} className="px-3 py-1 rounded bg-[#0f1720] text-white border" style={{ borderColor: '#333' }}>List Files</button>
+                    <button onClick={importSelectedOneDriveFiles} className="px-3 py-1 rounded bg-[#0063B1] text-white">Import Selected</button>
+                    <button onClick={disconnectOneDrive} className="px-3 py-1 rounded bg-transparent border text-gray-400" style={{ borderColor: '#333' }}>Disconnect</button>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 max-h-64 overflow-auto">
+                {driveFiles.length > 0 && (
+                  <div>
+                    <h5 className="mono" style={{ color: '#d0d0d0', marginBottom: '6px' }}>Google Drive Files</h5>
+                    {driveFiles.map((f: any) => (
+                      <label key={f.id} className="flex items-center gap-2 mono mb-2">
+                        <input type="checkbox" checked={!!selectedDriveFiles[f.id]} onChange={(e) => setSelectedDriveFiles(prev => ({ ...prev, [f.id]: e.target.checked }))} />
+                        <span className="truncate" style={{ color: f.mimeType === 'application/vnd.google-apps.folder' ? '#a0a0a0' : '#e0e0e0' }}>
+                          {f.mimeType === 'application/vnd.google-apps.folder' ? '📁 ' : '🎵 '}{f.name}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                {oneDriveFiles.length > 0 && (
+                  <div>
+                    <h5 className="mono" style={{ color: '#d0d0d0', marginBottom: '6px' }}>OneDrive Files</h5>
+                    {oneDriveFiles.map((f: any) => (
+                      <label key={f.id} className="flex items-center gap-2 mono mb-2">
+                        <input type="checkbox" checked={!!selectedOneDriveFiles[f.id]} onChange={(e) => setSelectedOneDriveFiles(prev => ({ ...prev, [f.id]: e.target.checked }))} />
+                        <span className="truncate" style={{ color: f.folder ? '#a0a0a0' : '#e0e0e0' }}>
+                          {f.folder ? '📁 ' : '🎵 '}{f.name}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         <input
           ref={fileInputRef}
@@ -792,7 +1522,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                 Loading tracks...
               </p>
             </div>
-          ) : localTracks.length === 0 ? (
+          ) : localTracks.length === 0 && cloudTracks.length === 0 ? (
             <div className="text-center py-12">
               <div
                 className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center"
@@ -803,7 +1533,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
               >
                 <Music size={24} color="#a0a0a0" />
               </div>
-              <p className="mono mb-2" style={{ color: '#a0a0a0', fontSize: '0.85rem' }}>
+              <p className="mono mb-2" style={{ color: '#b0b0b0', fontSize: '0.85rem' }}>
                 No local tracks imported yet
               </p>
               <p className="mono" style={{ color: '#666666', fontSize: '0.75rem' }}>
@@ -848,7 +1578,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                       value={sortMode}
                       onChange={(e) => setSortMode(e.target.value as 'added' | 'title' | 'artist')}
                       className="mono px-3 py-2 rounded-lg"
-                      style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#e0e0e0', fontSize: '0.75rem' }}
+                      style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#f0f0f0', fontSize: '0.75rem' }}
                     >
                       <option value="added">Added</option>
                       <option value="title">A–Z</option>
@@ -877,7 +1607,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
               {viewMode === 'tracks' ? (
                 <div className="space-y-2">
                   {(() => {
-                    const tracks = [...localTracks];
+                    const tracks: Track[] = [...localTracks, ...cloudTracks];
                     if (sortMode === 'title') {
                       tracks.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
                     } else if (sortMode === 'artist') {
@@ -894,74 +1624,85 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                     <div
                       key={track.id}
                       className="group flex items-center gap-4 p-3 rounded-lg transition-all duration-200"
-                      onClick={() => {
-                        if (playLockRef.current) return;
-                        playLockRef.current = true;
-                        try {
-                          onPlayTrack(track);
-                        } finally {
-                          setTimeout(() => { playLockRef.current = false; }, 300);
-                        }
+                      onClick={async () => {
+                        await handlePlayClick(track);
                       }}
                       style={{
-                        backgroundColor: currentPlayingId === track.id ? 'rgba(211, 47, 47, 0.1)' : '#252525',
-                        border: `1px solid ${currentPlayingId === track.id ? '#d32f2f' : '#333333'}`,
-                      }}
-                    >
-                      {/* Cover Art */}
-                      {track.coverArt ? (
-                        <img
-                          src={track.coverArt}
-                          alt={track.album}
-                          className="flex-shrink-0 w-12 h-12 rounded object-cover"
-                        />
-                      ) : (
-                        <div
-                          className="flex-shrink-0 w-12 h-12 rounded flex items-center justify-center"
-                          style={{ backgroundColor: '#1a1a1a', border: '1px solid #333333' }}
+                          gap: '0.35rem 1rem',
+                          gridTemplateColumns: 'minmax(0,2fr) minmax(0,1.1fr) minmax(0,1fr) minmax(64px,84px)',
+                          fontFamily: 'Syne',
+                          alignItems: 'center',
+                          alignContent: 'center',
+                        }}
+                      >
+                        <h4
+                          className="mono truncate flex items-center gap-2"
+                          style={{ color: '#f5f5f5', fontSize: '0.95rem', fontWeight: 400, letterSpacing: '0.01em', fontFamily: 'Syne' }}
+                          title={track.name}
                         >
-                          <Music size={20} color="#666666" />
-                        </div>
-                      )}
-
-                      {/* Track Info */}
-                      <div className="flex-1 min-w-0">
-                        <h4 className="mono truncate" style={{ color: '#e0e0e0', fontSize: '0.85rem' }}>
-                          {track.name}
+                          {track.coverArt ? (
+                            <img
+                              src={track.coverArt}
+                              alt="Album cover"
+                              className="w-8 h-8 rounded object-cover flex-shrink-0"
+                            />
+                          ) : (
+                            <div
+                              className="w-8 h-8 rounded flex items-center justify-center flex-shrink-0"
+                              style={{ backgroundColor: '#333333' }}
+                            >
+                              <Music size={12} color="#666666" />
+                            </div>
+                          )}
+                          {track.type === 'cloud' && <Cloud size={12} color="#00bcd4" />}
+                          {track.name || 'Untitled'}
                         </h4>
-                        <p className="mono truncate" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
-                          {track.artist} • {track.album}
-                        </p>
-                        <div className="flex items-center gap-3 mt-1">
+                        <span
+                          className="mono truncate"
+                          style={{ color: '#d0d0d0', fontSize: '0.82rem', fontWeight: 400, fontFamily: 'Syne' }}
+                          title={track.artist}
+                        >
+                          {track.artist || 'Unknown Artist'}
+                        </span>
+                        <span
+                          className="mono truncate hidden sm:block"
+                          style={{ color: '#a3a3a3', fontSize: '0.8rem', fontWeight: 400, fontFamily: 'Syne' }}
+                          title={track.album}
+                        >
+                          {track.album || 'Unknown Album'}
+                        </span>
+                        <div className="flex items-center justify-end" style={{ alignSelf: 'center' }}>
                           <span
-                            className="mono px-2 py-0.5 rounded"
+                            className="mono px-2 py-1 rounded"
                             style={{
-                              backgroundColor: '#1a1a1a',
+                              border: '1px solid #d32f2f',
                               color: '#d32f2f',
-                              fontSize: '0.65rem',
+                              backgroundColor: 'rgba(211, 47, 47, 0.08)',
+                              fontSize: '0.7rem',
+                              letterSpacing: '0.02em',
                             }}
                           >
-                            {track.format}
-                          </span>
-                          <span className="mono" style={{ color: '#666666', fontSize: '0.7rem' }}>
-                            {formatDuration(track.duration ?? 0)}
+                            {track.type === 'local' ? getTechBadge(track) : 'CLOUD'}
                           </span>
                         </div>
-                      </div>
+                        <div className="col-span-4 flex items-center gap-3" style={{ marginTop: 0 }}>
+                          <span className="mono" style={{ color: '#7c7c7c', fontSize: '0.72rem' }}>
+                            {formatDuration(track.duration ?? 0)}
+                          </span>
+                          {track.size ? (
+                            <span className="mono" style={{ color: '#666666', fontSize: '0.72rem' }}>
+                              • {formatFileSize(track.size)}
+                            </span>
+                          ) : null}
+                        </div>
 
                       {/* Play Button */}
                       <button
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation();
-                          if (playLockRef.current) return;
-                          playLockRef.current = true;
-                          try {
-                            onPlayTrack(track);
-                          } finally {
-                            // Release lock after short delay to avoid rapid double-starts
-                            setTimeout(() => { playLockRef.current = false; }, 300);
-                          }
+                          await handlePlayClick(track);
                         }}
+                        aria-label={`Play ${track.name || 'track'} by ${track.artist || 'unknown artist'}`}
                         className="flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-200 hover:scale-110"
                         style={{
                           backgroundColor: currentPlayingId === track.id ? '#d32f2f' : 'rgba(211, 47, 47, 0.15)',
@@ -991,12 +1732,12 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                   {/* Pagination controls */}
                   <div className="flex items-center justify-between mt-3">
                     <div className="flex items-center gap-2">
-                      <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>Per page:</span>
+                      <span className="mono" style={{ color: '#b0b0b0', fontSize: '0.7rem' }}>Per page:</span>
                       <select
                         value={pageSize}
                         onChange={(e) => setPageSize(parseInt(e.target.value, 10) || 25)}
                         className="mono px-2 py-1 rounded-lg"
-                        style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#e0e0e0', fontSize: '0.75rem' }}
+                        style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#f0f0f0', fontSize: '0.75rem' }}
                       >
                         <option value={10}>10</option>
                         <option value={25}>25</option>
@@ -1008,15 +1749,15 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                       <button
                         onClick={() => setPage((p) => Math.max(1, p - 1))}
                         className="px-3 py-1 rounded-lg"
-                        style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#e0e0e0', fontSize: '0.75rem' }}
+                        style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#f0f0f0', fontSize: '0.75rem' }}
                       >
                         Prev
                       </button>
-                      <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>{page}</span>
+                      <span className="mono" style={{ color: '#b0b0b0', fontSize: '0.75rem' }}>{page}</span>
                       <button
                         onClick={() => setPage((p) => p + 1)}
                         className="px-3 py-1 rounded-lg"
-                        style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#e0e0e0', fontSize: '0.75rem' }}
+                        style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#f0f0f0', fontSize: '0.75rem' }}
                       >
                         Next
                       </button>
@@ -1033,7 +1774,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                     const tracks = album.tracks;
 
                     // Build explicit disc groups using inferred/effective disc numbers
-                    const discGroups: Record<number, { disc: number; items: { track: LocalTrack; index: number }[] }> = {};
+                    const discGroups: Record<number, { disc: number; items: { track: Track; index: number }[] }> = {};
                     let inferredDisc = 1;
                     let lastTrackNumber = 0;
 
@@ -1081,8 +1822,9 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                         {group.items.map(({ track, index }) => (
                           <div
                             key={track.id}
-                            className="group flex items-center gap-3 p-3 rounded-lg transition-all duration-200 hover:bg-[#252525]"
+                            className="group grid items-center gap-3 p-3 rounded-lg transition-all duration-200"
                             style={{
+                              gridTemplateColumns: '32px 1fr 140px 96px',
                               backgroundColor: currentPlayingId === track.id ? 'rgba(211, 47, 47, 0.1)' : '#1a1a1a',
                               border: `1px solid ${currentPlayingId === track.id ? '#d32f2f' : '#333333'}`,
                             }}
@@ -1095,13 +1837,14 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                             </div>
 
                             {/* Track Info */}
-                            <div className="flex-1 min-w-0">
+                            <div className="min-w-0" style={{ gridColumn: '2' }}>
                               <div className="flex items-center gap-2 mb-0" style={{ alignItems: 'center' }}>
-                                <h4 className="mono truncate" style={{ color: '#e0e0e0', fontSize: '0.85rem', margin: 0, lineHeight: '1.2' }}>
+                                <h4 className="mono truncate flex items-center gap-2" style={{ color: '#e0e0e0', fontSize: '0.85rem', margin: 0, lineHeight: '1.2' }}>
+                                  {track.type === 'cloud' && <Cloud size={12} color="#00bcd4" />}
                                   {track.name}
                                 </h4>
                                 {/* Codec chip */}
-                                {track.codecLabel && (
+                                {track.codec && (
                                   <span
                                     className="mono"
                                     style={{
@@ -1117,7 +1860,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                                       color: '#e0e0e0'
                                     }}
                                   >
-                                    {String(track.codecLabel).toUpperCase()}
+                                    {String(track.codec).toUpperCase()}
                                   </span>
                                 )}
                                 {/* Fixed-size badge: <bit>-bit/<kHz>kHz */}
@@ -1142,7 +1885,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                                       color: track.bitDepth === 24 ? '#c6a700' : '#a0a0a0'
                                     }}>{track.bitDepth ? `${track.bitDepth}-bit` : ''}</span>
                                     <span style={{ color: '#555' }}>/</span>
-                                    <span style={{ color: '#d32f2f' }}>{track.sampleRate ? `${track.sampleRate}kHz` : ''}</span>
+                                    <span style={{ color: '#d32f2f' }}>{track.sampleRate ? `${track.sampleRate} Hz` : ''}</span>
                                   </span>
                                 )}
                               </div>
@@ -1153,14 +1896,9 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
 
                             {/* Play Button */}
                             <button
-                              onClick={() => {
-                                if (playLockRef.current) return;
-                                playLockRef.current = true;
-                                try {
-                                  onPlayTrack(track);
-                                } finally {
-                                  setTimeout(() => { playLockRef.current = false; }, 300);
-                                }
+                              aria-label={`Play ${track.name || 'track'} by ${track.artist || 'unknown artist'}`}
+                              onClick={async () => {
+                                await handlePlayClick(track);
                               }}
                               className="flex-shrink-0 p-2 rounded-full opacity-0 group-hover:opacity-100 transition-all duration-200"
                               style={{
@@ -1229,6 +1967,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                         )}
                         {/* Play Overlay */}
                         <button
+                          aria-label={`Play album ${album.name}`}
                           onClick={(e) => {
                             e.stopPropagation();
                             onPlayAlbum?.(album.tracks);
@@ -1247,10 +1986,10 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
 
                       {/* Album Info */}
                       <div className="p-3">
-                        <h4 className="mono truncate" style={{ color: '#e0e0e0', fontSize: '0.85rem' }}>
+                        <h4 className="mono truncate" style={{ color: '#e0e0e0', fontSize: '0.85rem', fontFamily: 'Syne', fontWeight: 400 }}>
                           {album.name}
                         </h4>
-                        <p className="mono truncate" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
+                        <p className="mono truncate" style={{ color: '#a0a0a0', fontSize: '0.75rem', fontFamily: 'Syne', fontWeight: 400 }}>
                           {album.artist}
                         </p>
                         <div className="flex items-center gap-2 mt-2">
@@ -1270,12 +2009,12 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                 {/* Pagination controls for albums */}
                 <div className="flex items-center justify-between mt-3">
                   <div className="flex items-center gap-2">
-                    <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>Per page:</span>
+                    <span className="mono" style={{ color: '#b0b0b0', fontSize: '0.7rem' }}>Per page:</span>
                     <select
                       value={pageSize}
                       onChange={(e) => setPageSize(parseInt(e.target.value, 10) || 25)}
                       className="mono px-2 py-1 rounded-lg"
-                      style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#e0e0e0', fontSize: '0.75rem' }}
+                      style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#f0f0f0', fontSize: '0.75rem' }}
                     >
                       <option value={10}>10</option>
                       <option value={25}>25</option>
@@ -1287,11 +2026,11 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
                     <button
                       onClick={() => setPage((p) => Math.max(1, p - 1))}
                       className="px-3 py-1 rounded-lg"
-                      style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#e0e0e0', fontSize: '0.75rem' }}
+                      style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#f0f0f0', fontSize: '0.75rem' }}
                     >
                       Prev
                     </button>
-                    <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>{page}</span>
+                    <span className="mono" style={{ color: '#b0b0b0', fontSize: '0.75rem' }}>{page}</span>
                     <button
                       onClick={() => setPage((p) => p + 1)}
                       className="px-3 py-1 rounded-lg"
@@ -1320,59 +2059,96 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
           </div>
         </div>
       </div>
+      {isDeleteModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.35)' }}
+          onClick={() => setIsDeleteModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-lg shadow-lg"
+            style={{
+              backgroundColor: '#0f0f11',
+              border: '1px solid rgba(255, 23, 68, 0.14)',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+              fontFamily: 'Syne, SFMono-Regular, ui-monospace',
+              padding: '16px'
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="purge-vault-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-3 pb-2">
+              <h3 id="purge-vault-title" className="mono" style={{ color: '#ff6b78', fontSize: '0.98rem', fontWeight: 700 }}>
+                ⚠️ PURGE VAULT?
+              </h3>
+              <button
+                aria-label="Close purge dialog"
+                onClick={() => setIsDeleteModalOpen(false)}
+                className="rounded p-1"
+                style={{ color: '#d0d0d0', background: 'transparent', border: 'none' }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M18 6L6 18" stroke="#d0d0d0" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M6 6L18 18" stroke="#d0d0d0" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="px-3 pt-2 pb-3">
+              <p className="mono" style={{ color: '#d6d6d6', fontSize: '0.9rem', lineHeight: 1.4 }}>
+                This action is irreversible. All local database entries will be wiped. Files on disk will remain untouched.
+              </p>
+              <div className="mt-3">
+                <label className="mono" style={{ color: '#bdbdbd', fontSize: '0.8rem', display: 'block', marginBottom: '6px' }}>
+                  Type <span style={{ color: '#ff1744', fontWeight: 700 }}>DELETE</span> to confirm
+                </label>
+                <input
+                  autoFocus
+                  value={deleteConfirmation}
+                  onChange={(e) => setDeleteConfirmation(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg mono"
+                  style={{
+                    backgroundColor: '#151516',
+                    border: '1px solid #2b2b2f',
+                    color: '#f3f3f3',
+                    fontSize: '0.9rem',
+                  }}
+                  placeholder="Type DELETE to enable the purge"
+                />
+              </div>
+              <div className="flex items-center justify-end gap-2 mt-4">
+                <button
+                  onClick={() => {
+                    setIsDeleteModalOpen(false);
+                    setDeleteConfirmation('');
+                  }}
+                  className="px-3 py-1.5 rounded mono"
+                  style={{ backgroundColor: '#19191a', border: '1px solid #2f2f35', color: '#dcdcdc' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={executeDeleteAllTracks}
+                  disabled={deleteConfirmation.trim().toUpperCase() !== 'DELETE' || isDeletingAll}
+                  className="px-3 py-1.5 rounded mono transition-all duration-150"
+                  style={{
+                    backgroundColor: deleteConfirmation.trim().toUpperCase() === 'DELETE' && !isDeletingAll ? '#ff1744' : 'transparent',
+                    border: '1px solid #ff1744',
+                    color: deleteConfirmation.trim().toUpperCase() === 'DELETE' && !isDeletingAll ? '#ffffff' : '#ff1744',
+                    opacity: deleteConfirmation.trim().toUpperCase() === 'DELETE' && !isDeletingAll ? 1 : 0.7,
+                    cursor: deleteConfirmation.trim().toUpperCase() === 'DELETE' && !isDeletingAll ? 'pointer' : 'not-allowed',
+                    minWidth: '96px'
+                  }}
+                >
+                  {isDeletingAll ? 'Purging…' : 'Purge'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   </div>
   );
-}
-
-// Repair unknown artist/album/title using filename heuristics
-async function repairMetadata(): Promise<void> {
-  try {
-    const db = await openDB();
-    const tx = db.transaction([STORE_NAME], 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    const all = await new Promise<any[]>((resolve, reject) => {
-      const req = store.getAll();
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-
-    let updatedCount = 0;
-    for (const t of all) {
-      const inferred = deriveFromFilename(t.file?.name || t.name || '');
-      const needsArtist = !t.artist || t.artist === 'Unknown Artist';
-      const needsAlbum = !t.album || t.album === 'Unknown Album';
-      const needsTitle = !t.name || /^\d{1,3}[\s._-]/.test(t.name);
-      const next = {
-        ...t,
-        artist: needsArtist ? (inferred.artist || t.artist) : t.artist,
-        album: needsAlbum ? (inferred.album || t.album) : t.album,
-        name: needsTitle ? (inferred.title || t.name) : t.name,
-        albumArtist: t.albumArtist || (needsArtist ? (inferred.artist || t.artist) : t.artist),
-      };
-
-      if (next.artist !== t.artist || next.album !== t.album || next.name !== t.name || next.albumArtist !== t.albumArtist) {
-        await new Promise<void>((resolve, reject) => {
-          const putReq = store.put(next);
-          putReq.onsuccess = () => resolve();
-          putReq.onerror = () => reject(putReq.error);
-        });
-        updatedCount += 1;
-      }
-    }
-
-    // Update UI state
-    try {
-      const refreshed = await getAllTracksFromDB();
-      const tracksWithUrls = refreshed.map((track) => ({
-        ...track,
-        url: track.url || (track.file ? URL.createObjectURL(track.file) : ''),
-      }));
-      // @ts-ignore: update local state via window event to avoid ref leakage
-      window.dispatchEvent(new CustomEvent('brick:local-tracks-refreshed', { detail: { count: updatedCount, tracks: tracksWithUrls } }));
-    } catch {}
-    console.log(`Repair complete: updated ${updatedCount} tracks`);
-  } catch (e) {
-    console.error('Repair metadata failed:', e);
-  }
-}
+};

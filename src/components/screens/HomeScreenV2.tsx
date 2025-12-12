@@ -36,7 +36,7 @@ export function HomeScreenV2({
   const [recentTracks, setRecentTracks] = useState<RecentlyPlayedTrack[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(true);
 
-  const getTrackQuality = (track: RecentlyPlayedTrack) => track.codecLabel || track.quality || 'MP3';
+  const getTrackQuality = (track: RecentlyPlayedTrack) => track.codec || track.quality || 'MP3';
 
   // Use external filter state if provided, otherwise use internal state
   const activeFilter = externalActiveFilter !== undefined ? externalActiveFilter : internalActiveFilter;
@@ -396,8 +396,8 @@ export function HomeScreenV2({
                           format: getTrackQuality(track),
                           bitDepth: track.bitDepth,
                           sampleRate: track.sampleRate,
-                          bitrateKbps: track.bitrateKbps,
-                          codecLabel: track.codecLabel,
+                          bitrate: track.bitrate ?? (track as any).bitrateKbps,
+                          codec: track.codec ?? (track as any).codecLabel ?? track.quality,
                         });
                       }
                     }}
@@ -415,12 +415,12 @@ export function HomeScreenV2({
 
                     {/* Info */}
                     <div className="flex-1 min-w-0 text-left">
-                      <h4 className="truncate mb-1" style={{ color: '#e0e0e0' }}>
+                      <h4 className="truncate mb-1" style={{ color: '#e0e0e0', fontFamily: '"Chakra Petch", "Syne", sans-serif', fontWeight: 600 }}>
                         {track.trackTitle}
                       </h4>
                       <p
                         className="truncate"
-                        style={{ color: '#a0a0a0', fontSize: '0.875rem' }}
+                        style={{ color: '#a0a0a0', fontSize: '0.875rem', fontFamily: '"Chakra Petch", "Syne", sans-serif', fontWeight: 500 }}
                       >
                         {track.artistName}
                       </p>
@@ -628,8 +628,8 @@ export function HomeScreenV2({
                           format: getTrackQuality(track),
                           bitDepth: track.bitDepth,
                           sampleRate: track.sampleRate,
-                          bitrateKbps: track.bitrateKbps,
-                          codecLabel: track.codecLabel,
+                          bitrate: track.bitrate ?? (track as any).bitrateKbps,
+                          codec: track.codec ?? (track as any).codecLabel ?? track.quality,
                         });
                       }
                     }}
@@ -647,12 +647,12 @@ export function HomeScreenV2({
 
                     {/* Info */}
                     <div className="flex-1 min-w-0 text-left">
-                      <h4 className="truncate mb-1" style={{ color: '#e0e0e0' }}>
+                      <h4 className="truncate mb-1" style={{ color: '#e0e0e0', fontFamily: '"Chakra Petch", "Syne", sans-serif', fontWeight: 600 }}>
                         {track.trackTitle}
                       </h4>
                       <p
                         className="truncate"
-                        style={{ color: '#a0a0a0', fontSize: '0.875rem' }}
+                        style={{ color: '#a0a0a0', fontSize: '0.875rem', fontFamily: '"Chakra Petch", "Syne", sans-serif', fontWeight: 500 }}
                       >
                         {track.artistName}
                       </p>

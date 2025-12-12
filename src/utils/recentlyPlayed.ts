@@ -11,9 +11,11 @@ export interface RecentlyPlayedTrack {
   album?: string;
   quality?: string;
   codecLabel?: string;
+  codec?: string; // Simple codec property for compatibility
   bitDepth?: number;
   sampleRate?: number;
   bitrateKbps?: number;
+  bitrate?: number; // kbps legacy field
   durationSeconds?: number;
   id?: string;
   title?: string;

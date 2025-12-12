@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { motion } from 'framer-motion';
 import { ArrowLeft, Plus, Trash2, Play, HardDrive, Music, X, GripVertical, Upload, Image as ImageIcon, Search } from 'lucide-react';
 import { ImageWithFallback } from '../figma/ImageWithFallback';
 import { openBrickDB } from '../../utils/db';
@@ -7,6 +8,7 @@ import type { Track } from '../../types';
 interface PlaylistCreationScreenProps {
   onClose: () => void;
   onPublish: (name: string, tracks: Track[]) => void;
+  inline?: boolean;
 }
 
 interface LocalTrack {
@@ -26,7 +28,7 @@ interface LocalTrack {
   codecLabel?: string;
 }
 
-export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationScreenProps) {
+export function PlaylistCreationScreen({ onClose, onPublish, inline = false }: PlaylistCreationScreenProps) {
   const [playlistName, setPlaylistName] = useState('');
   const [tracks, setTracks] = useState<Track[]>([]);
   const [structuralIntegrity, setStructuralIntegrity] = useState(0);
@@ -37,6 +39,7 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
   const [draggedTrackId, setDraggedTrackId] = useState<string | null>(null);
   const [customCoverImage, setCustomCoverImage] = useState<string | null>(null);
   const coverImageInputRef = useRef<HTMLInputElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [pageSize, setPageSize] = useState<number>(25);
   const [page, setPage] = useState<number>(1);
 
@@ -277,7 +280,7 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
       duration: formatDuration(localTrack.duration),
       quality: localTrack.format,
       coverArt: localTrack.coverArt || 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=300',
-      audioUrl: localTrack.url,
+      audioUrl: localTrack.audioUrl ?? localTrack.url,
       isPatronage: false,
       genre: localTrack.genre, // Pass through genre from local track
       bitDepth: localTrack.bitDepth,
@@ -390,454 +393,165 @@ export function PlaylistCreationScreen({ onClose, onPublish }: PlaylistCreationS
     console.log('========================');
   }, [playlistName, tracks, structuralIntegrity, canPublish]);
 
-  return (
-    <div className="fixed inset-0 z-50 bg-[#1a1a1a] overflow-y-auto pb-24">
-      {/* Header */}
-      <div
-        className="sticky top-0 z-10 px-6 py-4 border-b border-[#333333]"
-        style={{
-          backgroundColor: '#252525',
-          backdropFilter: 'blur(20px)',
-        }}
-      >
-        <div className="flex items-center justify-between">
-          <button onClick={onClose} className="p-2">
-            <X size={24} color="#a0a0a0" />
-          </button>
-          <h3 style={{ color: '#e0e0e0' }}>Drawing New Blueprints</h3>
-          <div className="w-10" />
-        </div>
-      </div>
+  // Escape key handler for overlay mode
+  useEffect(() => {
+    if (inline) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [inline, onClose]);
 
-      <div className="px-6 pt-6">
-        {/* Brick Name Input */}
-        <div className="mb-6">
-          <label className="mono mb-2 block" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
-            BRICK NAME
-          </label>
-          <input
-            type="text"
-            value={playlistName}
-            onChange={(e) => setPlaylistName(e.target.value)}
-            placeholder="Enter playlist name..."
-            className="w-full px-4 py-3 rounded-lg outline-none"
-            style={{
-              backgroundColor: '#252525',
-              border: '1px solid #333333',
-              color: '#e0e0e0',
-            }}
-          />
-        </div>
+  // Focus the name input when overlay opens
+  useEffect(() => {
+    if (inline) return;
+    setTimeout(() => nameInputRef.current?.focus(), 50);
+  }, [inline]);
 
-        {/* Custom Cover Image */}
-        <div className="mb-6">
-          <label className="mono mb-2 block" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
-            BRICK COVER IMAGE
-          </label>
-          <div
-            className="p-4 rounded-lg border-2 border-dashed cursor-pointer transition-all hover:border-[#d32f2f]"
-            style={{
-              backgroundColor: '#252525',
-              borderColor: customCoverImage ? '#d32f2f' : '#333333',
-            }}
-            onClick={openCoverImagePicker}
-          >
-            {customCoverImage ? (
-              <div className="flex items-center gap-3">
-                <img
-                  src={customCoverImage}
-                  alt="Custom cover"
-                  className="w-16 h-16 rounded object-cover"
-                />
-                <div className="flex-1">
-                  <p style={{ color: '#e0e0e0', fontSize: '0.875rem' }}>Custom image selected</p>
-                  <p className="mono text-xs" style={{ color: '#a0a0a0' }}>Click to change</p>
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-8">
-                <ImageIcon size={32} color="#546e7a" className="mb-2" />
-                <p style={{ color: '#e0e0e0', fontSize: '0.875rem' }}>Upload custom cover image</p>
-                <p className="mono text-xs" style={{ color: '#a0a0a0' }}>or drag and drop</p>
-              </div>
-            )}
+  // Main content JSX (reused for inline and overlay)
+  const content = (
+    <motion.div
+      id="playlist-creation-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="playlist-creation-title"
+      className="relative z-10 w-full max-w-4xl mx-auto overflow-hidden rounded-2xl shadow-2xl p-0 flex flex-col"
+      style={{ backgroundColor: 'rgba(20,20,20,0.85)', backdropFilter: 'blur(6px)', border: '1px solid rgba(211,47,47,0.8)', maxHeight: '80vh' }}
+      initial={{ opacity: 0, y: -8, scale: 0.995 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -8, scale: 0.995 }}
+      transition={{ duration: 0.18, ease: [0.2, 0.8, 0.4, 1] }}
+    >
+        <div className="flex items-center justify-between mb-3 px-4 py-3">
+          <div>
+            <h3 id="playlist-creation-title" className="text-2xl font-semibold" style={{ color: '#e0e0e0' }}>Drawing New Blueprints</h3>
+            <p className="text-xs mono mt-1" style={{ color: '#a0a0a0' }}>Use the search to find tracks and drag them into the batch to build your Brick.</p>
           </div>
-          <input
-            ref={coverImageInputRef}
-            type="file"
-            accept="image/*"
-            onChange={handleCoverImageUpload}
-            style={{ display: 'none' }}
-          />
-          {customCoverImage && (
-            <button
-              onClick={() => setCustomCoverImage(null)}
-              className="mt-2 w-full py-2 rounded text-xs transition-all"
-              style={{ backgroundColor: '#1a1a1a', border: '1px solid #333333', color: '#a0a0a0' }}
-            >
-              Remove custom image
-            </button>
-          )}
-        </div>
-
-        {/* The Batch List */}
-        <div className="mb-6">
-          <h4 className="mb-3">The Batch ({tracks.length} tracks)</h4>
-          
-          {tracks.length === 0 ? (
-            <div
-              className="p-8 rounded-lg text-center"
-              style={{
-                backgroundColor: '#252525',
-                border: '1px dashed #333333',
-              }}
-            >
-              <p style={{ color: '#a0a0a0' }}>No tracks added yet</p>
-            </div>
-          ) : (
-            <div
-              className="rounded-lg overflow-hidden"
-              style={{
-                backgroundColor: '#252525',
-                border: '1px solid #333333',
-              }}
-            >
-              {tracks.map((track, index) => (
-                <div
-                  key={track.id}
-                  draggable
-                  onDragStart={() => handleDragStart(track.id)}
-                  onDragOver={handleDragOver}
-                  onDrop={() => handleDrop(track.id)}
-                  onDragEnd={handleDragEnd}
-                  className={`flex items-center gap-3 p-3 border-b border-[#333333] last:border-b-0 transition-colors ${
-                    draggedTrackId === track.id ? 'opacity-50' : ''
-                  }`}
-                  style={{ 
-                    backgroundColor: draggedTrackId === track.id 
-                      ? 'rgba(211, 47, 47, 0.1)' 
-                      : index % 2 === 0 ? '#252525' : '#222222',
-                    cursor: 'grab'
-                  }}
-                >
-                  <GripVertical size={16} color="#a0a0a0" className="cursor-grab flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="truncate" style={{ color: '#e0e0e0', fontSize: '0.875rem' }}>
-                      {track.title}
-                    </p>
-                    <p className="mono truncate" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>
-                      {track.artist} • {track.duration} {track.genre && <span style={{ color: '#546e7a' }}>• {track.genre}</span>}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => removeTrack(track.id)}
-                    className="p-1 hover:bg-[#333333] rounded transition-colors flex-shrink-0"
-                  >
-                    <X size={16} color="#a0a0a0" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Add Tracks */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <h4>Available Tracks</h4>
-            {/* View Mode Toggle */}
-            <div className="flex gap-2">
-              <button
-                onClick={() => setViewMode('platform')}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all duration-200"
-                style={{
-                  backgroundColor: viewMode === 'platform' ? 'rgba(211, 47, 47, 0.2)' : '#252525',
-                  border: `1px solid ${viewMode === 'platform' ? '#d32f2f' : '#333333'}`,
-                }}
-              >
-                <Music size={14} color={viewMode === 'platform' ? '#d32f2f' : '#a0a0a0'} />
-                <span className="mono" style={{ color: viewMode === 'platform' ? '#d32f2f' : '#a0a0a0', fontSize: '0.7rem' }}>
-                  Platform
-                </span>
-              </button>
-              <button
-                onClick={() => setViewMode('local')}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all duration-200"
-                style={{
-                  backgroundColor: viewMode === 'local' ? 'rgba(211, 47, 47, 0.2)' : '#252525',
-                  border: `1px solid ${viewMode === 'local' ? '#d32f2f' : '#333333'}`,
-                }}
-              >
-                <HardDrive size={14} color={viewMode === 'local' ? '#d32f2f' : '#a0a0a0'} />
-                <span className="mono" style={{ color: viewMode === 'local' ? '#d32f2f' : '#a0a0a0', fontSize: '0.7rem' }}>
-                  Local ({localTracks.length})
-                </span>
-              </button>
-            </div>
-          </div>
-          <div className="relative mb-4" style={{ position: 'relative' }}>
-            <Search size={16} color="#546e7a" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by title, artist, or album..."
-              aria-label="Search tracks"
-              className="w-full py-2 px-4 rounded-lg outline-none"
-              style={{
-                backgroundColor: '#252525',
-                border: '1px solid #333333',
-                color: '#e0e0e0',
-                paddingLeft: '38px',
-                paddingRight: '34px',
-              }}
-            />
-            {searchQuery && (
+          <div className="flex items-center gap-3">
+            <div className="inline-flex items-center gap-2 rounded-lg bg-transparent" role="tablist" aria-label="View mode">
               <button
                 type="button"
-                onClick={() => setSearchQuery('')}
-                aria-label="Clear track search"
-                style={{
-                  position: 'absolute',
-                  right: 8,
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  background: 'none',
-                  border: 'none',
-                  color: '#a0a0a0',
-                  cursor: 'pointer',
-                }}
+                onClick={() => setViewMode('platform')}
+                aria-pressed={viewMode === 'platform'}
+                className={`px-3 py-2 rounded-lg transition ${viewMode === 'platform' ? 'bg-white/6 border border-white/10' : 'bg-transparent border border-transparent'}`}
+                style={{ borderColor: viewMode === 'platform' ? '#3a3a3a' : 'transparent' }}
+                title="Platform tracks"
               >
-                <X size={14} />
+                <div className="flex items-center gap-2">
+                  <Music size={14} color={viewMode === 'platform' ? '#d32f2f' : '#a0a0a0'} />
+                  <span className="mono text-xs" style={{ color: viewMode === 'platform' ? '#e0e0e0' : '#a0a0a0' }}>Platform</span>
+                </div>
               </button>
-            )}
-          </div>
-          <div className="space-y-2">
-            {/* Page size selector for available tracks */}
-            <div className="flex items-center justify-end gap-2 mb-2">
-              <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>Per page:</span>
-              <select
-                value={pageSize}
-                onChange={(e) => { setPageSize(parseInt(e.target.value, 10) || 25); setPage(1); }}
-                className="mono px-2 py-1 rounded-lg"
-                style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#e0e0e0', fontSize: '0.75rem' }}
+              <button
+                type="button"
+                onClick={() => setViewMode('local')}
+                aria-pressed={viewMode === 'local'}
+                className={`px-3 py-2 rounded-lg transition ${viewMode === 'local' ? 'bg-white/6 border border-white/10' : 'bg-transparent border border-transparent'}`}
+                style={{ borderColor: viewMode === 'local' ? '#3a3a3a' : 'transparent' }}
+                title="Local tracks"
               >
-                <option value={10}>10</option>
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
+                <div className="flex items-center gap-2">
+                  <HardDrive size={14} color={viewMode === 'local' ? '#d32f2f' : '#a0a0a0'} />
+                  <span className="mono text-xs" style={{ color: viewMode === 'local' ? '#e0e0e0' : '#a0a0a0' }}>Local</span>
+                </div>
+              </button>
             </div>
-            {viewMode === 'platform' ? (
-              filteredPlatformTracks.length === 0 ? (
-                <div className="p-6 rounded-lg text-center" style={{ backgroundColor: '#252525', border: '1px dashed #333333' }}>
-                  <p style={{ color: '#a0a0a0' }}>
-                    {hasSearch ? 'No tracks match your search.' : 'No platform tracks available right now.'}
-                  </p>
-                </div>
-              ) : (
-                ((() => {
-                  const total = filteredPlatformTracks.length;
-                  const start = (page - 1) * pageSize;
-                  const end = Math.min(start + pageSize, total);
-                  return filteredPlatformTracks.slice(start, end);
-                })()).map((track) => {
-                  const isAdded = tracks.some(t => t.id === track.id);
-                  return (
-                    <button
-                      key={track.id}
-                      onClick={() => !isAdded && addTrack(track)}
-                      disabled={isAdded}
-                      className="w-full flex items-center gap-3 p-3 rounded-lg text-left transition-all"
-                      style={{
-                        backgroundColor: isAdded ? '#1a1a1a' : '#252525',
-                        border: '1px solid #333333',
-                        opacity: isAdded ? 0.5 : 1,
-                        cursor: isAdded ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      <ImageWithFallback
-                        src={track.coverArt}
-                        alt={track.album}
-                        className="w-12 h-12 rounded object-cover"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="truncate" style={{ color: '#e0e0e0' }}>
-                          {track.title || track.name}
-                        </p>
-                        <p className="mono truncate" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
-                          {track.artist}
-                        </p>
-                      </div>
-                      {!isAdded && <Plus size={20} color="#546e7a" />}
-                    </button>
-                  );
-                })
-              )
-            ) : (
-              isLoadingLocal ? (
-                <div className="p-8 rounded-lg text-center" style={{ backgroundColor: '#252525', border: '1px dashed #333333' }}>
-                  <p style={{ color: '#a0a0a0' }}>Loading local tracks...</p>
-                </div>
-              ) : localTracks.length === 0 ? (
-                <div className="p-8 rounded-lg text-center" style={{ backgroundColor: '#252525', border: '1px dashed #333333' }}>
-                  <HardDrive size={32} color="#666666" className="mx-auto mb-3" />
-                  <p style={{ color: '#a0a0a0', marginBottom: '8px' }}>No local tracks available</p>
-                  <p className="mono" style={{ color: '#666666', fontSize: '0.7rem' }}>
-                    Upload tracks from the home screen to add them here
-                  </p>
-                </div>
-              ) : filteredLocalTracks.length === 0 ? (
-                <div className="p-8 rounded-lg text-center" style={{ backgroundColor: '#252525', border: '1px dashed #333333' }}>
-                  <p style={{ color: '#a0a0a0' }}>No local tracks match your search.</p>
-                </div>
-              ) : (
-                ((() => {
-                  const total = filteredLocalTracks.length;
-                  const start = (page - 1) * pageSize;
-                  const end = Math.min(start + pageSize, total);
-                  return filteredLocalTracks.slice(start, end);
-                })()).map((track) => {
-                  const isAdded = tracks.some(t => t.id === track.id);
-                  return (
-                    <button
-                      key={track.id}
-                      onClick={() => !isAdded && addLocalTrack(track)}
-                      disabled={isAdded}
-                      className="w-full flex items-center gap-3 p-3 rounded-lg text-left transition-all"
-                      style={{
-                        backgroundColor: isAdded ? '#1a1a1a' : '#252525',
-                        border: '1px solid #333333',
-                        opacity: isAdded ? 0.5 : 1,
-                        cursor: isAdded ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      <ImageWithFallback
-                        src={track.coverArt}
-                        alt={track.album}
-                        className="w-12 h-12 rounded object-cover"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="truncate" style={{ color: '#e0e0e0' }}>
-                          {track.name}
-                        </p>
-                        <p className="mono truncate" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
-                          {track.artist} {track.genre && <span style={{ color: '#546e7a' }}>• {track.genre}</span>}
-                        </p>
-                      </div>
-                      {!isAdded && <Plus size={20} color="#546e7a" />}
-                    </button>
-                  );
-                })
-              )
-            )}
-            {/* Pagination controls */}
-            <div className="flex items-center justify-between mt-3">
-              <div />
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="px-3 py-1 rounded-lg"
-                  style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#e0e0e0', fontSize: '0.75rem' }}
-                >
-                  Prev
-                </button>
-                <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>{page}</span>
-                <button
-                  onClick={() => setPage((p) => p + 1)}
-                  className="px-3 py-1 rounded-lg"
-                  style={{ backgroundColor: '#252525', border: '1px solid #333333', color: '#e0e0e0', fontSize: '0.75rem' }}
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Structural Integrity Gauge */}
-        <div
-          className="p-6 rounded-lg mb-6"
-          style={{
-            backgroundColor: '#252525',
-            border: '1px solid #333333',
-          }}
-        >
-          <div className="flex items-center justify-between mb-3">
-            <h4 style={{ color: '#e0e0e0' }}>Structural Integrity</h4>
-            <span
-              className="mono"
-              style={{
-                color: structuralIntegrity >= 50 ? '#4caf50' : '#d32f2f',
-                fontSize: '1.25rem',
-              }}
-            >
-              {structuralIntegrity}%
-            </span>
-          </div>
-          
-          <div className="w-full bg-[#1a1a1a] rounded-full h-2 mb-3">
-            <div
-              className="h-2 rounded-full transition-all duration-300"
-              style={{
-                width: `${structuralIntegrity}%`,
-                background:
-                  structuralIntegrity >= 50
-                    ? 'linear-gradient(to right, #4caf50, #8bc34a)'
-                    : 'linear-gradient(to right, #d32f2f, #b71c1c)',
-              }}
+            <input
+              aria-label="Search tracks"
+              className="rounded-lg px-3 py-2 mono" 
+              placeholder="Search by title, artist, or album..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ backgroundColor: '#212121', color: '#e0e0e0', border: '1px solid #2e2e2e', minWidth: '220px' }}
             />
+            <button onClick={onClose} aria-label="Close" className="p-2 rounded hover:bg-white/5 transition" title="Close">
+              <X size={20} color="#a0a0a0" />
+            </button>
           </div>
-
-          <p style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>
-            {structuralIntegrity < 50
-              ? 'Genre clash detected. Mix compatible genres to strengthen this Brick.'
-              : 'Genre uniformity maintained. This Brick has strong structural integrity.'}
-          </p>
         </div>
 
-        {/* Fire Brick Button */}
-        <button
-          onClick={() => {
-            if (canPublish) {
-              // Clean tracks to remove non-serializable data (File objects, blob URLs)
-              const cleanedTracks = tracks.map(track => ({
-                id: track.id,
-                title: track.title,
-                artist: track.artist,
-                album: track.album,
-                duration: track.duration,
-                quality: track.quality,
-                coverArt: track.coverArt,
-                audioUrl: track.audioUrl?.startsWith('blob:') ? undefined : track.audioUrl, // Remove blob URLs
-                isPatronage: track.isPatronage,
-                genre: track.genre,
-              }));
-              
-              console.log('Publishing cleaned tracks:', cleanedTracks);
-              console.log('Custom cover image:', customCoverImage ? 'Present' : 'None');
-              
-              // Store custom cover image in localStorage temporarily for the handler
-              if (customCoverImage) {
-                sessionStorage.setItem('playlistCustomCover', customCoverImage);
-              }
-              
-              onPublish(playlistName, cleanedTracks);
-            }
-          }}
-          disabled={!canPublish}
-          className="w-full py-4 rounded-full transition-all mb-6"
-          style={{
-            background: canPublish
-              ? 'linear-gradient(to bottom, #d32f2f, #b71c1c)'
-              : 'linear-gradient(to bottom, #333333, #2a2a2a)',
-            color: canPublish ? '#e0e0e0' : '#666666',
-            boxShadow: canPublish ? '0 4px 12px rgba(211, 47, 47, 0.3)' : 'none',
-            cursor: canPublish ? 'pointer' : 'not-allowed',
-          }}
-        >
-          Fire Brick (Publish)
-        </button>
+        <div className="overflow-y-auto flex-1 px-4 py-3">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+          <div className="md:col-span-4">
+            <label className="mono mb-2 block" style={{ color: '#a0a0a0', fontSize: '0.75rem' }}>BRICK NAME</label>
+            <input ref={nameInputRef} type="text" value={playlistName} onChange={(e)=>setPlaylistName(e.target.value)} placeholder="Enter playlist name..." className="w-full px-3 py-2 rounded-lg outline-none mono" style={{ backgroundColor: '#232323', border: '1px solid #333333', color: '#e0e0e0' }} />
+
+            <div className="mt-4">
+              <h4 className="mb-2">The Batch <span className="mono text-xs" style={{ color: '#a0a0a0' }}>({tracks.length})</span></h4>
+              {tracks.length === 0 ? (
+                <div className="p-4 rounded-lg text-center min-h-[220px] flex items-center justify-center" style={{ backgroundColor: '#222228', border: '1px dashed #2d2d2d' }}>
+                  <p style={{ color: '#a0a0a0' }}>No tracks added yet</p>
+                </div>
+              ) : (
+                <div className="rounded-lg overflow-hidden min-h-[220px]" style={{ backgroundColor: '#222228', border: '1px solid #2d2d2d' }}>{/* simplified batch UI in embedded mode */}
+                  {tracks.map((t, idx)=> {
+                    const displayDur = typeof t.duration === 'string' && t.duration.includes(':') ? t.duration : formatDuration(Number(t.duration) || 0);
+                    return (
+                      <div key={t.id} className={`flex items-center gap-3 p-3 ${idx < tracks.length-1 ? 'border-b' : ''} min-h-[64px] cursor-grab ${draggedTrackId === t.id ? 'opacity-50' : ''}`} style={{ color: '#e0e0e0', borderColor: '#2d2d2d' }} draggable onDragStart={() => handleDragStart(t.id)} onDragOver={handleDragOver} onDrop={() => handleDrop(t.id)} onDragEnd={handleDragEnd} aria-grabbed={draggedTrackId === t.id}>
+                        <div className="w-8 text-center mono" style={{ color: '#a0a0a0' }}>{idx + 1}</div>
+                        <input type="number" min={1} max={tracks.length} value={idx + 1} onChange={(e)=>{ const newIndex = Math.max(1, Math.min(tracks.length, Number(e.target.value || idx + 1))); if(newIndex -1 !== idx) reorderTracks(t.id, tracks[newIndex -1]?.id || t.id); }} className="w-12 text-center rounded bg-transparent border border-transparent text-xs mono" />
+                          <GripVertical size={16} color="#a0a0a0" className="cursor-grab" />
+                          <ImageWithFallback src={t.coverArt || t.audioUrl || ''} alt={t.album} className="w-12 h-12 rounded object-cover" />
+                        <div className={`flex-1 min-w-0 text-left ${draggedTrackId === t.id ? 'opacity-50' : ''}`} aria-grabbed={draggedTrackId === t.id}>
+                          <div className="truncate font-semibold">{t.title || t.name}</div>
+                          <div className="mono text-xs text-[#9a9a9a]">{t.artist} • {typeof t.duration === 'string' && t.duration.includes(':') ? t.duration : formatDuration(Number(t.duration) || 0)}</div>
+                        </div>
+                      <button onClick={() => removeTrack(t.id)} className="p-1 hover:bg-white/5 rounded transition" aria-label={`Remove ${t.title || t.name}`}>
+                        <X size={16} color="#a0a0a0" />
+                      </button>
+                      </div>
+                    );
+                  })}</div>
+              )}
+            </div>
+          </div>
+
+          <div className="md:col-span-8">
+            <div className="mb-2">
+              <h4 className="mb-2">Results</h4>
+            </div>
+            <div className="space-y-2 min-h-[220px]">
+              {(viewMode === 'platform' ? filteredPlatformTracks : filteredLocalTracks).slice(0, pageSize).map(track => (
+                <button
+                  key={track.id}
+                  onClick={()=>addTrack(track)}
+                  className="w-full flex items-center gap-3 p-3 rounded-lg transition hover:bg-white/5 min-h-[64px]"
+                  style={{ backgroundColor: '#212121', border: '1px solid #2a2a2a' }}
+                >
+                  <ImageWithFallback src={track.coverArt} alt={track.album} className="w-12 h-12 rounded object-cover" />
+                    <div className="flex-1 min-w-0 text-left">
+                      <p className="truncate font-semibold" style={{ color: '#e0e0e0' }}>{track.title || (track as any).name}</p>
+                      <p className="mono truncate text-xs" style={{ color: '#a0a0a0' }}>{track.artist}</p>
+                    </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        </div>
+        <div className="px-4 py-3">
+          <div className="mt-0">
+            <button onClick={() => { if (canPublish) onPublish(playlistName, tracks); }} className="w-full py-3 rounded-full" style={{ background: canPublish ? 'linear-gradient(to bottom, #d32f2f, #b71c1c)' : 'linear-gradient(to bottom, #333333, #2a2a2a)', color: canPublish ? '#e0e0e0' : '#9a9a9a' }} disabled={!canPublish}>Fire Brick (Publish)</button>
+          </div>
+        </div>
+      </motion.div>
+  );
+
+  if (inline) {
+    return content;
+  }
+
+  // Overlay modal version, keep the same width and layout as inline
+  return (
+    <div className="absolute inset-0 z-[105] flex items-center justify-center p-4">
+      {/* Subtle animated backdrop */}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 0.1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }} className="absolute inset-0 bg-black/10" onClick={onClose} />
+      <div onClick={(e) => e.stopPropagation()} className="relative z-20 w-full flex justify-center">
+        <div className="w-full max-w-4xl">
+          {content}
+        </div>
       </div>
     </div>
   );

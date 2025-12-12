@@ -115,7 +115,7 @@ interface Connection {
 
 interface RadarScreenProps {
   onUserClick: (userId: string) => void;
-  onTrackClick?: (track: Track, playlist: Track[]) => void;
+  onTrackClick?: (track: any, playlist: any[]) => void;
 }
 
 

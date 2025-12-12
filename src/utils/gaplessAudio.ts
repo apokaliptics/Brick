@@ -25,6 +25,7 @@ type TrackChangeCallback = (trackId: string) => void;
 export class GaplessAudioEngine {
   private audioContext: AudioContext;
   private gainNode: GainNode;
+  private analyserNode: AnalyserNode | null = null;
   
   // Dual buffer system for gapless playback
   private currentSource: AudioBufferSourceNode | null = null;
@@ -82,15 +83,28 @@ export class GaplessAudioEngine {
     this.trebleFilter = this.audioContext.createBiquadFilter();
     this.trebleFilter.type = 'highshelf';
     this.trebleFilter.frequency.value = 3200;
+    // Create analyser node and wire it into the graph so external code can tap it
+    this.analyserNode = this.audioContext.createAnalyser();
+    this.analyserNode.fftSize = 2048;
+    this.analyserNode.smoothingTimeConstant = 0.4;
     
     // Connect audio graph: gain -> bass -> mid -> treble -> destination
     this.gainNode.connect(this.bassFilter);
     this.bassFilter.connect(this.midFilter);
     this.midFilter.connect(this.trebleFilter);
-    this.trebleFilter.connect(this.audioContext.destination);
+    // Connect treble filter -> analyser -> destination to allow visualizers to use the analyser
+    this.trebleFilter.connect(this.analyserNode);
+    this.analyserNode.connect(this.audioContext.destination);
     
     // Start time update loop
     this.startTimeUpdates();
+  }
+
+  /**
+   * Expose an AnalyserNode for external visualizers
+   */
+  getAnalyserNode(): AnalyserNode | null {
+    return this.analyserNode;
   }
 
   /**
