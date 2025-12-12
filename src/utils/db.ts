@@ -1,5 +1,5 @@
 const DB_NAME = 'BrickMusicDB';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 const ensureObjectStores = (db: IDBDatabase) => {
   if (!db.objectStoreNames.contains('localTracks')) {
@@ -18,6 +18,18 @@ const ensureObjectStores = (db: IDBDatabase) => {
   if (!db.objectStoreNames.contains('recentlyPlayedPlaylists')) {
     const store = db.createObjectStore('recentlyPlayedPlaylists', { keyPath: 'playlistId' });
     store.createIndex('playedAt', 'playedAt', { unique: false });
+  }
+
+  // Cloud-related stores (tokens and imported cloud tracks)
+  if (!db.objectStoreNames.contains('cloudTokens')) {
+    db.createObjectStore('cloudTokens', { keyPath: 'provider' });
+  }
+
+  if (!db.objectStoreNames.contains('cloudTracks')) {
+    const cloudStore = db.createObjectStore('cloudTracks', { keyPath: 'id' });
+    cloudStore.createIndex('provider', 'provider', { unique: false });
+    cloudStore.createIndex('addedAt', 'addedAt', { unique: false });
+    cloudStore.createIndex('name', 'name', { unique: false });
   }
 };
 

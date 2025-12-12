@@ -280,7 +280,7 @@ export function PlaylistCreationScreen({ onClose, onPublish, inline = false }: P
       duration: formatDuration(localTrack.duration),
       quality: localTrack.format,
       coverArt: localTrack.coverArt || 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=300',
-      audioUrl: localTrack.audioUrl ?? localTrack.url,
+      audioUrl: localTrack.url,
       isPatronage: false,
       genre: localTrack.genre, // Pass through genre from local track
       bitDepth: localTrack.bitDepth,
@@ -515,13 +515,19 @@ export function PlaylistCreationScreen({ onClose, onPublish, inline = false }: P
               {(viewMode === 'platform' ? filteredPlatformTracks : filteredLocalTracks).slice(0, pageSize).map(track => (
                 <button
                   key={track.id}
-                  onClick={()=>addTrack(track)}
+                  onClick={() => {
+                    if (viewMode === 'local') {
+                      addLocalTrack(track as LocalTrack);
+                    } else {
+                      addTrack(track as Track);
+                    }
+                  }}
                   className="w-full flex items-center gap-3 p-3 rounded-lg transition hover:bg-white/5 min-h-[64px]"
                   style={{ backgroundColor: '#212121', border: '1px solid #2a2a2a' }}
                 >
                   <ImageWithFallback src={track.coverArt} alt={track.album} className="w-12 h-12 rounded object-cover" />
                     <div className="flex-1 min-w-0 text-left">
-                      <p className="truncate font-semibold" style={{ color: '#e0e0e0' }}>{track.title || (track as any).name}</p>
+                      <p className="truncate font-semibold" style={{ color: '#e0e0e0' }}>{(track as any).title || (track as any).name}</p>
                       <p className="mono truncate text-xs" style={{ color: '#a0a0a0' }}>{track.artist}</p>
                     </div>
                 </button>

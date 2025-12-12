@@ -62,6 +62,10 @@ interface CloudTrack {
   url?: string; // Lazy loaded
   audioUrl?: string; // direct download link or signed url
   isLong?: boolean;
+  cloudProvider?: 'google' | 'onedrive';
+  cloudId?: string;
+  filePath?: string | null;
+  isCloud?: boolean;
   type: 'cloud';
 }
 
@@ -119,6 +123,15 @@ const extractNumberFromTags = (tags: Record<string, any>, keys: string[]): numbe
 };
 
 const stripExtension = (filename: string) => filename.replace(/\.[^.]+$/, '');
+
+const audioExtensions = ['mp3', 'flac', 'wav', 'm4a', 'aac', 'ogg', 'opus', 'alac', 'aiff', 'wma'];
+
+const isAudioFileName = (name?: string, mime?: string) => {
+  if (!name && !mime) return false;
+  const lower = (name || '').toLowerCase();
+  if (mime && mime.toLowerCase().startsWith('audio/')) return true;
+  return audioExtensions.some(ext => lower.endsWith(`.${ext}`));
+};
 
 const extractNumbersFromFilename = (filename: string) => {
   const base = stripExtension(filename);
@@ -366,6 +379,12 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
         cloudRequest.onsuccess = () => {
           const loadedCloudTracks = cloudRequest.result.map(track => ({
             ...track,
+            provider: track.provider || track.cloudProvider || 'google',
+            cloudProvider: track.provider || track.cloudProvider || 'google',
+            cloudId: track.cloudId || track.fileId,
+            fileId: track.fileId || track.cloudId,
+            isCloud: track.isCloud ?? true,
+            filePath: track.filePath ?? null,
             type: 'cloud' as const,
           }));
           console.log('Successfully loaded cloud tracks:', loadedCloudTracks.length);
@@ -914,6 +933,62 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
     return tokenObj;
   };
 
+  const fetchDriveFolderChildren = async (folderId: string, token: string): Promise<GoogleDriveFile[]> => {
+    const collected: GoogleDriveFile[] = [];
+    let pageToken: string | undefined;
+    do {
+      const query = `'${folderId}' in parents and trashed=false`;
+      const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType,size)&pageSize=100${pageToken ? `&pageToken=${pageToken}` : ''}`;
+      const resp: Response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const json: any = await resp.json();
+      collected.push(...(json.files || []));
+      pageToken = json.nextPageToken;
+    } while (pageToken);
+    return collected;
+  };
+
+  const collectDriveAudioFiles = async (item: GoogleDriveFile, token: string): Promise<GoogleDriveFile[]> => {
+    if (!item) return [];
+    if (item.mimeType === 'application/vnd.google-apps.folder') {
+      const children = await fetchDriveFolderChildren(item.id, token);
+      const nested: GoogleDriveFile[] = [];
+      for (const child of children) {
+        const inner = await collectDriveAudioFiles(child, token);
+        nested.push(...inner);
+      }
+      return nested;
+    }
+    if (isAudioFileName(item.name, item.mimeType)) return [item];
+    return [];
+  };
+
+  const fetchOneDriveFolderChildren = async (itemId: string, token: string): Promise<OneDriveItem[]> => {
+    const collected: OneDriveItem[] = [];
+    let nextLink: string | undefined = `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/children?$select=id,name,size,folder,file`;
+    while (nextLink) {
+      const resp: Response = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
+      const json: any = await resp.json();
+      collected.push(...(json.value || []));
+      nextLink = json['@odata.nextLink'];
+    }
+    return collected;
+  };
+
+  const collectOneDriveAudioFiles = async (item: OneDriveItem, token: string): Promise<OneDriveItem[]> => {
+    if (!item) return [];
+    if (item.folder) {
+      const children = await fetchOneDriveFolderChildren(item.id, token);
+      const nested: OneDriveItem[] = [];
+      for (const child of children) {
+        const inner = await collectOneDriveAudioFiles(child, token);
+        nested.push(...inner);
+      }
+      return nested;
+    }
+    if (isAudioFileName(item.name, item.file?.mimeType)) return [item];
+    return [];
+  };
+
   const listDriveFiles = async () => {
     const token = await getCloudToken('google');
     if (!token?.access_token) {
@@ -992,23 +1067,34 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
     const selectedIds = Object.keys(selectedDriveFiles).filter(k => selectedDriveFiles[k]);
     if (!selectedIds.length) return;
     const token = await getCloudToken('google');
-    const toImport: CloudTrack[] = selectedIds.map(id => {
-      const f = driveFiles.find((d) => d.id === id);
-      return ({
-        id: `gdrive-${id}`,
-        name: f?.name || id,
-        artist: 'Unknown Artist',
-        album: 'Unknown Album',
-        addedAt: Date.now(),
-        fileId: id,
-        accessToken: token?.access_token || '',
-        provider: 'google',
-        format: f?.mimeType?.split('/')?.pop()?.toUpperCase() || 'MP3',
-        size: f?.size ? Number(f.size) : 0,
-        audioUrl: `http://localhost:4000/api/cloud/audio?provider=google&fileId=${id}&accessToken=${encodeURIComponent(token?.access_token || '')}`,
-        type: 'cloud',
-      });
-    });
+    if (!token?.access_token) return;
+    const audioFiles: GoogleDriveFile[] = [];
+    for (const id of selectedIds) {
+      const base = driveFiles.find((d) => d.id === id);
+      if (!base) continue;
+      const files = await collectDriveAudioFiles(base, token.access_token);
+      audioFiles.push(...files);
+    }
+    const unique = new Map<string, GoogleDriveFile>();
+    audioFiles.forEach(f => unique.set(f.id, f));
+    const toImport: CloudTrack[] = Array.from(unique.values()).map(f => ({
+      id: `gdrive-${f.id}`,
+      name: f.name,
+      artist: 'Unknown Artist',
+      album: 'Unknown Album',
+      addedAt: Date.now(),
+      fileId: f.id,
+      cloudId: f.id,
+      filePath: null,
+      accessToken: token.access_token,
+      provider: 'google',
+      cloudProvider: 'google',
+      format: f.mimeType?.split('/')?.pop()?.toUpperCase() || 'MP3',
+      size: f.size ? Number(f.size) : 0,
+      audioUrl: '',
+      isCloud: true,
+      type: 'cloud',
+    }));
     try {
       const db = await openBrickDB();
       const tx = db.transaction(['cloudTracks'], 'readwrite');
@@ -1026,23 +1112,34 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
     const selectedIds = Object.keys(selectedOneDriveFiles).filter(k => selectedOneDriveFiles[k]);
     if (!selectedIds.length) return;
     const token = await getCloudToken('onedrive');
-    const toImport: CloudTrack[] = selectedIds.map(id => {
-      const f = oneDriveFiles.find((d) => d.id === id);
-      return ({
-        id: `onedrive-${id}`,
-        name: f?.name || id,
-        artist: 'Unknown Artist',
-        album: 'Unknown Album',
-        addedAt: Date.now(),
-        fileId: id,
-        accessToken: token?.access_token || '',
-        provider: 'onedrive',
-        format: f?.file?.mimeType?.split('/')?.pop()?.toUpperCase() || 'MP3',
-        size: f?.size || 0,
-        audioUrl: `http://localhost:4000/api/cloud/audio?provider=onedrive&fileId=${id}&accessToken=${encodeURIComponent(token?.access_token || '')}`,
-        type: 'cloud',
-      });
-    });
+    if (!token?.access_token) return;
+    const audioFiles: OneDriveItem[] = [];
+    for (const id of selectedIds) {
+      const base = oneDriveFiles.find((d) => d.id === id);
+      if (!base) continue;
+      const files = await collectOneDriveAudioFiles(base, token.access_token);
+      audioFiles.push(...files);
+    }
+    const unique = new Map<string, OneDriveItem>();
+    audioFiles.forEach(f => unique.set(f.id, f));
+    const toImport: CloudTrack[] = Array.from(unique.values()).map(f => ({
+      id: `onedrive-${f.id}`,
+      name: f.name || f.id,
+      artist: 'Unknown Artist',
+      album: 'Unknown Album',
+      addedAt: Date.now(),
+      fileId: f.id,
+      cloudId: f.id,
+      filePath: null,
+      accessToken: token.access_token,
+      provider: 'onedrive',
+      cloudProvider: 'onedrive',
+      format: f.file?.mimeType?.split('/')?.pop()?.toUpperCase() || 'MP3',
+      size: f.size || 0,
+      audioUrl: '',
+      isCloud: true,
+      type: 'cloud',
+    }));
     try {
       const db = await openBrickDB();
       const tx = db.transaction(['cloudTracks'], 'readwrite');
@@ -1105,11 +1202,15 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
         album: album || 'Unknown Album',
         addedAt: Date.now(),
         fileId,
+        cloudId: fileId,
+        cloudProvider: provider,
         audioUrl: isCloudProvider ? '' : url, // For cloud providers, resolve later
+        filePath: null,
         accessToken: '',
         provider,
         format,
         size: 0, // Size unknown for URLs
+        isCloud: true,
         type: 'cloud',
       };
 
@@ -1128,8 +1229,9 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
   const resolveAudioUrlForCloudTrack = async (track: CloudTrack) => {
     try {
       // If fileId is a full public URL, use it directly
-      if (typeof track.fileId === 'string' && (track.fileId.startsWith('http://') || track.fileId.startsWith('https://'))) {
-        track.audioUrl = track.fileId;
+      const fileRef = track.cloudId || track.fileId;
+      if (typeof fileRef === 'string' && (fileRef.startsWith('http://') || fileRef.startsWith('https://'))) {
+        track.audioUrl = fileRef;
         const db = await openBrickDB();
         const tx = db.transaction(['cloudTracks'], 'readwrite');
         const store = tx.objectStore('cloudTracks');
@@ -1140,10 +1242,13 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
       const token = await getCloudToken(track.provider);
       if (!token?.access_token) throw new Error('No token');
       // Use local proxy to avoid CORS
-      const proxyUrl = `http://localhost:4000/api/cloud/audio?provider=${track.provider}&fileId=${track.fileId}&accessToken=${encodeURIComponent(token.access_token)}`;
+      const proxyUrl = `http://localhost:4000/api/cloud/audio?provider=${track.provider}&fileId=${fileRef}&accessToken=${encodeURIComponent(token.access_token)}`;
       // Update DB with audioUrl
       track.audioUrl = proxyUrl;
       track.accessToken = token.access_token;
+      track.cloudProvider = track.provider;
+      track.cloudId = fileRef;
+      track.isCloud = true;
       const db = await openBrickDB();
       const tx = db.transaction(['cloudTracks'], 'readwrite');
       const store = tx.objectStore('cloudTracks');
