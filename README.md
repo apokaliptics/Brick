@@ -15,6 +15,13 @@ Environment Variables
 
 - For CI: set `VITE_GOOGLE_CLIENT_ID` and `VITE_ONEDRIVE_CLIENT_ID` as environment variables in your build pipeline if you want the cloud services enabled during builds.
 
+Tauri (Desktop) OAuth
+---------------------
+
+- The desktop app uses a deep link redirect scheme `brick://oauth-callback` for OAuth flows.
+- Ensure `src-tauri/tauri.conf.json` contains a protocol registration for `brick` and the `bundle.identifier` is set for the app.
+- When registering OAuth client IDs in Google or Microsoft portals, use `brick://oauth-callback` as the redirect URI for desktop builds.
+
 Security
 --------
 
