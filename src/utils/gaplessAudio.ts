@@ -58,8 +58,8 @@ export class GaplessAudioEngine {
   private playbackStartTime: number = 0;
   private pausedAt: number = 0;
   private scheduledNextTrack: boolean = false;
+  private nextScheduledStartTime: number | null = null;
   private preloadTimeoutId: number | null = null;
-  private swapTimeoutId: number | null = null;
   
   // EQ filters
   private bassFilter: BiquadFilterNode;
@@ -334,14 +334,18 @@ export class GaplessAudioEngine {
         // This event belongs to a previous source that already handed off to the next track
         return;
       }
-      // Current track ended
-      if (!this.scheduledNextTrack) {
-        // No next track was scheduled - stop playback
-        this.isPlaying = false;
-        this.notifyStateChange({ isPlaying: false });
-        if (this.onTrackEnd) {
-          this.onTrackEnd();
-        }
+
+      // If a gapless transition was scheduled, perform it exactly at the planned time
+      if (this.scheduledNextTrack && this.nextScheduledStartTime !== null) {
+        this.performGaplessTransition(this.nextScheduledStartTime);
+        return;
+      }
+
+      // Current track ended without a scheduled next track
+      this.isPlaying = false;
+      this.notifyStateChange({ isPlaying: false });
+      if (this.onTrackEnd) {
+        this.onTrackEnd();
       }
     };
 
@@ -700,14 +704,7 @@ export class GaplessAudioEngine {
       const currentSourceEndTime = this.playbackStartTime + duration;
       this.nextSource.start(currentSourceEndTime);
 
-      // Next track scheduled to start at: ${currentSourceEndTime}
-
-      const timeUntilSwap = (currentSourceEndTime - this.audioContext.currentTime) * 1000 - 50;
-      this.swapTimeoutId = window.setTimeout(() => {
-        if (this.isPlaying) {
-          this.performGaplessTransition(currentSourceEndTime);
-        }
-      }, Math.max(0, timeUntilSwap));
+      this.nextScheduledStartTime = currentSourceEndTime;
     }, timeUntilPreload);
   }
 
@@ -716,12 +713,7 @@ export class GaplessAudioEngine {
       clearTimeout(this.preloadTimeoutId);
       this.preloadTimeoutId = null;
     }
-
-    if (this.swapTimeoutId !== null) {
-      clearTimeout(this.swapTimeoutId);
-      this.swapTimeoutId = null;
-    }
-
+    this.nextScheduledStartTime = null;
     this.scheduledNextTrack = false;
   }
 
