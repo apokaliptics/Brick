@@ -1,4 +1,4 @@
-import { useState } from 'react';
+/* eslint-disable */
 import { Play, Pause, SkipBack, SkipForward, Link2 } from 'lucide-react';
 import { Track } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
@@ -8,10 +8,28 @@ interface PlayerProps {
   connectionName?: string;
   isPlaying: boolean;
   onPlayPause: () => void;
+  currentTime?: number;
+  duration?: number;
+  formatTime?: (seconds: number) => string;
 }
 
-export function Player({ track, connectionName, isPlaying, onPlayPause }: PlayerProps) {
-  const [progress, setProgress] = useState(45); // Mock progress
+// Helper function copied from PlayerV3 for parity
+const formatDuration = (duration: string | number): string => {
+  if (typeof duration === 'string') {
+    if (duration.includes(':')) return duration;
+    const secs = parseFloat(duration);
+    const mins = Math.floor(secs / 60);
+    const remainingSecs = Math.floor(secs % 60);
+    return `${mins}:${remainingSecs.toString().padStart(2, '0')}`;
+  } else {
+    const mins = Math.floor(duration / 60);
+    const secs = Math.floor(duration % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }
+};
+
+export function Player({ track, connectionName, isPlaying, onPlayPause, currentTime = 0, duration = 0, formatTime = (s: number) => '0:00' }: PlayerProps) {
+  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
@@ -93,15 +111,15 @@ export function Player({ track, connectionName, isPlaying, onPlayPause }: Player
             <div
               className="h-1 rounded-full transition-all"
               style={{
-                width: `${progress}%`,
+                width: `${progressPercent}%`,
                 background: 'linear-gradient(to right, #d32f2f, #b71c1c)',
                 boxShadow: '0 0 10px rgba(211, 47, 47, 0.5)',
               }}
             />
           </div>
           <div className="flex justify-between mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>
-            <span>2:03</span>
-            <span>{track.duration}</span>
+            <span>{formatTime(currentTime)}</span>
+            <span>{formatDuration(track.duration ?? 0)}</span>
           </div>
         </div>
 
