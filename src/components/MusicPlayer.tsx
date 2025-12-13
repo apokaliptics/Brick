@@ -92,6 +92,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
   const handleNextRef = useRef<(reason?: 'auto' | 'manual') => void>(() => {});
   const currentTrackRef = useRef<Track | null>(currentTrack);
   const volumeRef = useRef(volume);
+  const controlsRef = useRef<any | null>(null);
 
   useEffect(() => {
     volumeRef.current = volume;
@@ -257,6 +258,10 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     const nextTrack = resolveNextTrack(trackId);
     if (!nextTrack) return;
 
+    console.log('Preloading next track for', trackId, '→', nextTrack.id, {
+      playlistLength: playlistRef.current.length,
+    });
+
     // Streaming tracks should not be preloaded into memory
     if (shouldStreamWithHtml(nextTrack)) {
       setPreloadState({ trackId: nextTrack.id, status: 'idle', isCloud: nextTrack.isCloud });
@@ -340,6 +345,12 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
           }
         },
         onTrackEnd: () => {
+          // Ensure currentTrackRef stays aligned with the engine's current track before we compute next indices
+          const engineId = gaplessEngineRef.current?.getCurrentTrackId?.();
+          if (engineId) {
+            const synced = playlistRef.current.find(t => t.id === engineId) || null;
+            currentTrackRef.current = synced;
+          }
           wallCompletionRef.current?.(currentTrackRef.current);
           if (repeatStateRef.current.repeatOne) {
             console.log('Looping current track');
@@ -350,12 +361,16 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
           }
         },
         onTrackChange: (trackId) => {
-          console.log('Gapless transition to track:', trackId);
+          const localTrack = playlistRef.current.find(t => t.id === trackId) || null;
+          currentTrackRef.current = localTrack;
+          console.log('Gapless transition to track:', trackId, {
+            playlistLength: playlistRef.current.length,
+            currentTrackId: localTrack?.id,
+          });
           engineDrivenTrackRef.current = trackId;
           preloadNextForTrackRef.current?.(trackId);
-          const updatedTrack = playlistRef.current.find(t => t.id === trackId);
-          if (updatedTrack && onTrackChangeRef.current) {
-            onTrackChangeRef.current(updatedTrack);
+          if (localTrack && onTrackChangeRef.current) {
+            onTrackChangeRef.current(localTrack);
           }
         },
         onPreloadStateChange: (state) => {
@@ -410,6 +425,8 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
       return;
     }
 
+      currentTrackRef.current = track;
+
     // If engine already has this track loaded, skip redundant load
     if (engine && engine.getCurrentTrackId && engine.getCurrentTrackId() === track.id) {
       lastLoadedTrackIdRef.current = track.id;
@@ -417,6 +434,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     }
 
     lastLoadedTrackIdRef.current = track.id;
+    currentTrackRef.current = track;
 
     bufferHoldRef.current = false;
     setIsBufferingNext(false);
@@ -482,7 +500,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
           return;
         }
         isLoadingTrackRef.current = false;
-        console.log('Track loaded successfully, starting playback');
+        console.log('Track loaded successfully, starting playback', { trackId: track.id, requestId });
         engine.seek(0);
         if (desiredPlayStateRef.current) {
           engine.play();
@@ -625,11 +643,41 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
 
     const engine = gaplessEngineRef.current;
     const tracks = playlistRef.current;
-    const currentTrack = currentTrackRef.current;
-    if (!currentTrack || !tracks.length) return;
+
+    const resolveCurrentIndex = (): { index: number; track: Track | null } => {
+      const byRef = currentTrackRef.current ? tracks.findIndex(t => t.id === currentTrackRef.current?.id) : -1;
+      if (byRef !== -1) {
+        return { index: byRef, track: currentTrackRef.current };
+      }
+      const byLastLoaded = lastLoadedTrackIdRef.current ? tracks.findIndex(t => t.id === lastLoadedTrackIdRef.current) : -1;
+      if (byLastLoaded !== -1) {
+        const track = tracks[byLastLoaded];
+        currentTrackRef.current = track;
+        return { index: byLastLoaded, track };
+      }
+      if (tracks.length > 0) {
+        currentTrackRef.current = tracks[0];
+        return { index: 0, track: tracks[0] };
+      }
+      return { index: -1, track: null };
+    };
+
+    const { index: currentIndexResolved, track: currentTrack } = resolveCurrentIndex();
+
+    if (!currentTrack || currentIndexResolved === -1) {
+      console.warn('handleNext aborted: missing currentTrack or empty playlist', { currentTrackId: currentTrack?.id, playlistLength: tracks.length });
+      return;
+    }
+
+    console.log('handleNext invoked', {
+      reason,
+      currentTrackId: currentTrack.id,
+      playlistLength: tracks.length,
+      playlistIds: tracks.map(t => t.id).slice(0, 20),
+    });
 
     console.log('Skipping to next track');
-    const currentIndex = tracks.findIndex(t => t.id === currentTrack.id);
+    const currentIndex = currentIndexResolved;
     let nextIndex: number = currentIndex;
 
     if (isShuffle) {
@@ -645,7 +693,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
         nextIndex = Math.floor(Math.random() * tracks.length);
       } while (nextIndex === currentIndex);
     } else {
-      nextIndex = currentIndex === -1 ? 0 : currentIndex + 1;
+      nextIndex = currentIndex + 1;
 
       if (nextIndex >= tracks.length) {
         if (isRepeat) {
@@ -808,35 +856,45 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
 
   const seekDisplayTime = (isScrubbing && scrubTime !== null) ? scrubTime : currentTime;
 
-  // Expose controls to parent
+  // Expose controls to parent once; keep the object updated via refs to avoid re-render loops
   useEffect(() => {
-    if (onControlsReady) {
-      onControlsReady({
+    if (!onControlsReady) return;
+
+    if (!controlsRef.current) {
+      controlsRef.current = {
         gaplessEngine: gaplessEngineRef.current,
-        isPlaying,
         togglePlayPause,
         handleNext,
         handlePrevious,
         seek: commitSeek,
-        currentTime,
-        duration,
         formatTime,
-        volume,
         setVolume: setExternalVolume,
-        eqBands,
         setEqBands: setExternalEq,
         invalidateWallSession: wallTracker.invalidateSession,
-        wallSessionCount: wallTracker.consecutiveTracks,
-        usingHtmlAudio,
         getAnalyserNode: () => gaplessEngineRef.current?.getAnalyserNode?.() || null,
-      });
+      };
+    } else {
+      controlsRef.current.togglePlayPause = togglePlayPause;
+      controlsRef.current.handleNext = handleNext;
+      controlsRef.current.handlePrevious = handlePrevious;
+      controlsRef.current.seek = commitSeek;
+      controlsRef.current.setVolume = setExternalVolume;
+      controlsRef.current.setEqBands = setExternalEq;
+      controlsRef.current.invalidateWallSession = wallTracker.invalidateSession;
+      controlsRef.current.getAnalyserNode = () => gaplessEngineRef.current?.getAnalyserNode?.() || null;
     }
+
+    controlsRef.current.gaplessEngine = gaplessEngineRef.current;
+    controlsRef.current.isPlaying = isPlaying;
+    controlsRef.current.currentTime = currentTime;
+    controlsRef.current.duration = duration;
+    controlsRef.current.volume = volume;
+    controlsRef.current.eqBands = eqBands;
+    controlsRef.current.wallSessionCount = wallTracker.consecutiveTracks;
+    controlsRef.current.usingHtmlAudio = usingHtmlAudio;
+
+    onControlsReady(controlsRef.current);
   }, [
-    isPlaying,
-    currentTime,
-    duration,
-    volume,
-    eqBands,
     onControlsReady,
     togglePlayPause,
     handleNext,
@@ -844,10 +902,22 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     commitSeek,
     setExternalVolume,
     setExternalEq,
-    wallTracker.consecutiveTracks,
     wallTracker.invalidateSession,
-    usingHtmlAudio,
   ]);
+
+  // Keep controlsRef in sync without re-calling onControlsReady on every tick
+  useEffect(() => {
+    if (!controlsRef.current) return;
+    controlsRef.current.isPlaying = isPlaying;
+    controlsRef.current.currentTime = currentTime;
+    controlsRef.current.duration = duration;
+    controlsRef.current.volume = volume;
+    controlsRef.current.eqBands = eqBands;
+    controlsRef.current.wallSessionCount = wallTracker.consecutiveTracks;
+    controlsRef.current.usingHtmlAudio = usingHtmlAudio;
+    // Inform parent of the updated live fields so UI overlays (sidebar, progress, analyzer) update
+    onControlsReady?.({ ...controlsRef.current });
+  }, [isPlaying, currentTime, duration, volume, eqBands, wallTracker.consecutiveTracks, usingHtmlAudio]);
 
   // Fallback polling to keep time/duration fresh even if callbacks hiccup
   useEffect(() => {
@@ -924,6 +994,8 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     }
   }, [currentTime, duration, preloadState, resolveNextTrack]);
 
+  const displayTrack = currentTrack ?? currentTrackRef.current;
+
   // Render empty-state UI when no track
 
   return (
@@ -939,7 +1011,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
         >
           {/* Player */}
           <div className="max-w-screen-2xl mr-auto px-4 py-2">
-            {currentTrack ? (
+            {displayTrack ? (
             <div className="mr-auto" style={{ maxWidth: '1500px', width: '100%' }}>
               <div className="player-bottom-row">
               {/* Track Info - Left Column (Fixed Width) */}
@@ -952,8 +1024,8 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
                   style={{ lineHeight: 0 }}
                 >
                   <ImageWithFallback
-                    src={currentTrack.coverImage || currentTrack.coverArt}
-                    alt={currentTrack.title || currentTrack.name || 'Track'}
+                    src={displayTrack.coverImage || displayTrack.coverArt}
+                    alt={displayTrack.title || displayTrack.name || 'Track'}
                     className="w-14 h-14 object-cover"
                   />
                 </button>
@@ -964,13 +1036,13 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
                       onClick={handleCoverClick}
                       className="text-left truncate mono hover:text-[#d32f2f] transition-colors"
                       style={{ color: '#e0e0e0', fontSize: '0.9rem', margin: 0, lineHeight: '1.2', fontWeight: 700 }}
-                      title={currentTrack.title || currentTrack.name || 'Untitled'}
+                      title={displayTrack.title || displayTrack.name || 'Untitled'}
                     >
-                      {currentTrack.title || currentTrack.name || 'Untitled'}
+                      {displayTrack.title || displayTrack.name || 'Untitled'}
                     </button>
                   </div>
                   <p className="truncate mono" style={{ color: '#a0a0a0', fontSize: '0.75rem', marginTop: '0px', lineHeight: '1.2' }}>
-                    {currentTrack.artist}
+                    {displayTrack.artist}
                   </p>
                   <div className="flex flex-wrap items-center gap-1 mt-2">
                     {audioMeta?.codecLabel && (

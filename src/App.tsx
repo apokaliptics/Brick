@@ -1,5 +1,5 @@
 /* eslint-disable */
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Home, Zap, Plus, List, Search, Disc3, Play, X, HardDrive, Cloud } from 'lucide-react';
 import SeismicMonitor from './components/SeismicMonitor';
 import { useTheme } from './contexts/ThemeContext';
@@ -114,6 +114,7 @@ export default function App() {
   const [isPink, setIsPink] = useState(false);
   const [isMonitorEnabled, setIsMonitorEnabled] = useState(false);
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
+  const lastLocalAlbumSignatureRef = useRef<string | null>(null);
 
   // Mirror playing state from the shared player so overlays stay in sync
   useEffect(() => {
@@ -502,6 +503,17 @@ export default function App() {
   const handleLocalAlbumPlay = (localTracks: any[]) => {
     notifyWallSessionReset('local-album');
     console.log('Playing local album with', localTracks.length, 'tracks');
+
+    // Prevent reloading the same album repeatedly (avoids restart loops on gapless transitions)
+    const signature = localTracks.map(t => t.id).join('|');
+    if (
+      lastLocalAlbumSignatureRef.current === signature &&
+      playlist.length === localTracks.length
+    ) {
+      console.log('Skipping reload of identical local album');
+      return;
+    }
+    lastLocalAlbumSignatureRef.current = signature;
     
     // Convert local tracks to player format
     const playerTracks = localTracks.map(track => ({
