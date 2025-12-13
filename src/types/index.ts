@@ -64,6 +64,10 @@ export interface Track {
   codec?: string; // Simple codec field
   file?: File;
   filePath?: string;
+  isCloud?: boolean;
+  cloudProvider?: 'google' | 'onedrive' | string;
+  cloudId?: string;
+  accessToken?: string;
 }
 
 export interface Connection {

@@ -18,8 +18,10 @@ export const generateCodeChallenge = async (verifier: string) => {
   return base64url(digest);
 };
 
-export async function exchangeGoogleCodeForToken({code, codeVerifier, redirectUri, clientId}: {
-  code: string; codeVerifier: string; redirectUri: string; clientId: string;
+export const DESKTOP_REDIRECT_URI = 'brick://oauth-callback';
+
+export async function exchangeGoogleCodeForToken({code, codeVerifier, redirectUri = DESKTOP_REDIRECT_URI, clientId}: {
+  code: string; codeVerifier: string; redirectUri?: string; clientId: string;
 }) {
   const body = new URLSearchParams();
   body.set('code', code);
@@ -44,8 +46,8 @@ export async function refreshGoogleAccessToken({ refreshToken, clientId }: { ref
   return await resp.json();
 }
 
-export async function exchangeMicrosoftCodeForToken({code, codeVerifier, redirectUri, clientId}: {
-  code: string; codeVerifier: string; redirectUri: string; clientId: string;
+export async function exchangeMicrosoftCodeForToken({code, codeVerifier, redirectUri = DESKTOP_REDIRECT_URI, clientId}: {
+  code: string; codeVerifier: string; redirectUri?: string; clientId: string;
 }) {
   const body = new URLSearchParams();
   body.set('client_id', clientId);
@@ -70,13 +72,13 @@ export async function refreshMicrosoftAccessToken({ refreshToken, clientId }: { 
   return await resp.json();
 }
 
-export const buildGoogleAuthUrl = async ({clientId, redirectUri, codeChallenge}: {clientId:string, redirectUri:string, codeChallenge:string}) => {
+export const buildGoogleAuthUrl = async ({clientId, redirectUri = DESKTOP_REDIRECT_URI, codeChallenge}: {clientId:string, redirectUri?:string, codeChallenge:string}) => {
   const scope = encodeURIComponent('https://www.googleapis.com/auth/drive.readonly');
   const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&response_type=code&scope=${scope}&redirect_uri=${encodeURIComponent(redirectUri)}&code_challenge=${codeChallenge}&code_challenge_method=S256&access_type=offline&prompt=consent&state=google`;
   return url;
 };
 
-export const buildMicrosoftAuthUrl = async ({clientId, redirectUri, codeChallenge}:{clientId:string, redirectUri:string, codeChallenge:string}) => {
+export const buildMicrosoftAuthUrl = async ({clientId, redirectUri = DESKTOP_REDIRECT_URI, codeChallenge}:{clientId:string, redirectUri?:string, codeChallenge:string}) => {
   const scope = encodeURIComponent('offline_access Files.Read Files.Read.All openid profile');
   const url = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${clientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&response_mode=query&scope=${scope}&code_challenge=${codeChallenge}&code_challenge_method=S256&prompt=select_account&state=onedrive`;
   return url;

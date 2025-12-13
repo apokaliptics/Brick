@@ -1,6 +1,6 @@
 {
   "name": "Brick",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "private": true,
   "dependencies": {
     "@jsr/supabase__supabase-js": "^2.49.8",
@@ -65,7 +65,8 @@
     "eslint": "^8.48.0",
     "@typescript-eslint/parser": "^6.3.0",
     "@typescript-eslint/eslint-plugin": "^6.3.0",
-    "eslint-plugin-import": "^2.29.5"
+    "eslint-plugin-import": "^2.29.5",
+    "dotenv": "^16.1.4"
   },
   "scripts": {
     "dev": "vite",

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Repeat, Shuffle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Repeat, Shuffle, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { formatBitrate } from '../utils/audioMetaHelpers';
 import { addRecentlyPlayedTrack } from '../utils/recentlyPlayed';
@@ -53,6 +53,14 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     midQ: 1,
     trebleFreq: 3200,
   });
+  const [preloadState, setPreloadState] = useState<{ trackId: string | null; status: 'idle' | 'loading' | 'ready' | 'error'; message?: string; isCloud?: boolean }>({
+    trackId: null,
+    status: 'idle',
+  });
+  const [isBufferingNext, setIsBufferingNext] = useState(false);
+  const [bufferingMessage, setBufferingMessage] = useState<string | null>(null);
+  const bufferHoldRef = useRef(false);
+  const usingHtmlAudioRef = useRef(usingHtmlAudio);
   // Shared style for EQ gain value pills
   const eqValueStyle: CSSProperties = {
     display: 'inline-block',
@@ -131,6 +139,10 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     currentTrackRef.current = currentTrack;
   }, [currentTrack]);
 
+  useEffect(() => {
+    usingHtmlAudioRef.current = usingHtmlAudio;
+  }, [usingHtmlAudio]);
+
   const getPlayableUrl = useCallback((track: Track): string => {
     if (track?.audioUrl && typeof track.audioUrl === 'string' && track.audioUrl.trim().length > 0) {
       return track.audioUrl;
@@ -138,11 +150,47 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     return FALLBACK_AUDIO_URL;
   }, []);
 
+  const getDurationSeconds = useCallback((track: Track): number => {
+    if (typeof track.duration === 'number') {
+      return track.duration;
+    }
+    if (typeof track.duration === 'string') {
+      const parsed = Number(track.duration);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+  }, []);
+
   const shouldStreamWithHtml = useCallback((track: Track): boolean => {
-    const durationSeconds = typeof track.duration === 'number' ? track.duration : 0;
-    const inferredBitrate = track.bitrateKbps ?? (track.quality === 'FLAC' ? 900 : 320);
-    const estimatedSizeMb = durationSeconds > 0 ? (inferredBitrate * 1000 / 8 * durationSeconds) / (1024 * 1024) : 0;
-    return durationSeconds >= 900 || estimatedSizeMb >= 80;
+    const durationSeconds = getDurationSeconds(track);
+    const inferredBitrate = track.bitrateKbps ?? track.bitrate ?? (track.quality?.toLowerCase() === 'flac' ? 1100 : 320);
+    const estimatedSizeMb = durationSeconds > 0
+      ? (inferredBitrate * 1000 / 8 * durationSeconds) / (1024 * 1024)
+      : 0;
+    return estimatedSizeMb > 200;
+  }, [getDurationSeconds]);
+
+  const resolveNextTrack = useCallback((trackId: string | null): Track | null => {
+    if (!trackId) return null;
+    if (shuffleRef.current || repeatStateRef.current.repeatOne) return null;
+
+    const tracks = playlistRef.current;
+    if (!tracks.length) return null;
+
+    const currentIndex = tracks.findIndex(t => t.id === trackId);
+    if (currentIndex === -1) return null;
+
+    let nextIndex = currentIndex + 1;
+    if (nextIndex >= tracks.length) {
+      if (repeatStateRef.current.repeatAll) {
+        nextIndex = 0;
+      } else {
+        return null;
+      }
+    }
+
+    if (nextIndex === currentIndex) return null;
+    return tracks[nextIndex] ?? null;
   }, []);
 
   const startHtmlAudio = useCallback(async (url: string, track: Track, autoPlay: boolean) => {
@@ -182,36 +230,37 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
   }, [duration]);
 
   const preloadNextForTrack = useCallback((trackId: string) => {
-    if (!gaplessEngineRef.current) return;
-    if (shuffleRef.current || repeatStateRef.current.repeatOne) return;
+    const engine = gaplessEngineRef.current;
+    if (!engine) return;
 
-    const tracks = playlistRef.current;
-    if (!tracks.length) return;
-
-    const currentIndex = tracks.findIndex(t => t.id === trackId);
-    if (currentIndex === -1) return;
-
-    let nextIndex = currentIndex + 1;
-    if (nextIndex >= tracks.length) {
-      if (!repeatStateRef.current.repeatAll) {
-        return;
-      }
-      nextIndex = 0;
-    }
-
-    if (nextIndex === currentIndex) return;
-
-    const nextTrack = tracks[nextIndex];
+    const nextTrack = resolveNextTrack(trackId);
     if (!nextTrack) return;
+
+    if (preloadState.trackId === nextTrack.id && (preloadState.status === 'loading' || preloadState.status === 'ready')) {
+      return;
+    }
 
     const url = getPlayableUrl(nextTrack);
     if (!url) return;
 
-    gaplessEngineRef.current.preloadNextTrack({
+    setPreloadState({
+      trackId: nextTrack.id,
+      status: 'loading',
+      isCloud: nextTrack.isCloud,
+    });
+
+    engine.preloadNextTrack({
       url,
       id: nextTrack.id,
+      isCloud: nextTrack.isCloud,
     });
-  }, []);
+  }, [getPlayableUrl, preloadState, resolveNextTrack]);
+
+  const retryPreload = useCallback(() => {
+    const active = currentTrackRef.current;
+    if (!active) return;
+    preloadNextForTrack(active.id);
+  }, [preloadNextForTrack]);
 
   const logTrackPlayback = (track: Track) => {
     const safeUrl = getPlayableUrl(track);
@@ -275,6 +324,26 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
           if (updatedTrack && onTrackChangeRef.current) {
             onTrackChangeRef.current(updatedTrack);
           }
+        },
+        onPreloadStateChange: (state) => {
+          setPreloadState({
+            trackId: state.trackId,
+            status: state.status,
+            message: state.message,
+            isCloud: state.isCloud,
+          });
+
+          if (state.status === 'ready' && bufferHoldRef.current && desiredPlayStateRef.current && !usingHtmlAudioRef.current) {
+            bufferHoldRef.current = false;
+            setIsBufferingNext(false);
+            setBufferingMessage(null);
+            gaplessEngineRef.current?.play();
+          }
+
+          if (state.status === 'error') {
+            setIsBufferingNext(true);
+            setBufferingMessage(state.message || 'Network issue while preparing the next track');
+          }
         }
       });
       
@@ -301,6 +370,11 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
   useEffect(() => {
     const engine = gaplessEngineRef.current;
     if (!currentTrack) return;
+
+    bufferHoldRef.current = false;
+    setIsBufferingNext(false);
+    setBufferingMessage(null);
+    setPreloadState(prev => ({ ...prev, status: 'idle', trackId: null, message: undefined, isCloud: undefined }));
 
     // Reset HTML fallback state on new track
     setUsingHtmlAudio(false);
@@ -725,6 +799,47 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     return () => clearInterval(interval);
   }, [usingHtmlAudio]);
 
+  // Pause near track end if next buffer is not ready yet (cloud-aware guard)
+  useEffect(() => {
+    const engine = gaplessEngineRef.current;
+    const activeTrack = currentTrackRef.current;
+    if (!engine || !activeTrack || usingHtmlAudioRef.current) return;
+
+    const nextTrack = resolveNextTrack(activeTrack.id);
+    if (!nextTrack) {
+      if (bufferHoldRef.current) {
+        bufferHoldRef.current = false;
+        setIsBufferingNext(false);
+        setBufferingMessage(null);
+      }
+      return;
+    }
+
+    const nextReady = preloadState.trackId === nextTrack.id && preloadState.status === 'ready';
+    const safeDuration = Number.isFinite(duration) ? duration : 0;
+    const remaining = Math.max(0, safeDuration - currentTime);
+    const guardWindow = nextTrack.isCloud ? 5 : 3;
+
+    if (bufferHoldRef.current) {
+      if (nextReady) {
+        bufferHoldRef.current = false;
+        setIsBufferingNext(false);
+        setBufferingMessage(null);
+        if (desiredPlayStateRef.current) {
+          engine.play();
+        }
+      }
+      return;
+    }
+
+    if (!nextReady && desiredPlayStateRef.current && remaining > 0 && remaining <= guardWindow) {
+      bufferHoldRef.current = true;
+      setIsBufferingNext(true);
+      setBufferingMessage(nextTrack.isCloud ? 'Buffering album from cloud…' : 'Buffering next track…');
+      engine.pause();
+    }
+  }, [currentTime, duration, preloadState, resolveNextTrack]);
+
   // Render empty-state UI when no track
 
   return (
@@ -975,6 +1090,43 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
                     {formatTime(duration)}
                   </span>
                 </div>
+
+                {(isBufferingNext || preloadState.status === 'loading' || preloadState.status === 'error') && (
+                  <div className="flex items-center justify-center gap-3 w-full" style={{ maxWidth: '500px', color: '#c0c0c0', fontSize: '0.75rem' }}>
+                    {preloadState.status === 'loading' && (
+                      <>
+                        <Loader2 size={14} className="animate-spin" />
+                        <span className="mono" style={{ color: '#ffcc80' }}>
+                          {preloadState.isCloud ? 'Buffering album from cloud…' : 'Preloading next track…'}
+                        </span>
+                      </>
+                    )}
+                    {preloadState.status === 'error' && (
+                      <>
+                        <span className="mono" style={{ color: '#ff8a80' }}>
+                          {bufferingMessage || preloadState.message || 'Next track failed to buffer'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={retryPreload}
+                          className="mono px-2 py-1 rounded border"
+                          style={{
+                            borderColor: '#ff8a80',
+                            color: '#ff8a80',
+                            background: 'rgba(255, 138, 128, 0.08)',
+                          }}
+                        >
+                          Retry
+                        </button>
+                      </>
+                    )}
+                    {isBufferingNext && preloadState.status !== 'error' && (
+                      <span className="mono" style={{ color: '#ffcc80' }}>
+                        {bufferingMessage || 'Buffering album…'}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Volume Control & EQ - Right Column */}

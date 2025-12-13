@@ -8,6 +8,7 @@
 interface Track {
   url: string;
   id: string;
+  isCloud?: boolean;
 }
 
 interface AudioState {
@@ -21,6 +22,12 @@ interface AudioState {
 type StateChangeCallback = (state: Partial<AudioState>) => void;
 type TrackEndCallback = () => void;
 type TrackChangeCallback = (trackId: string) => void;
+type PreloadStateCallback = (state: {
+  trackId: string;
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  message?: string;
+  isCloud?: boolean;
+}) => void;
 
 export class GaplessAudioEngine {
   private audioContext: AudioContext;
@@ -56,11 +63,16 @@ export class GaplessAudioEngine {
   private onStateChange: StateChangeCallback | null = null;
   private onTrackEnd: TrackEndCallback | null = null;
   private onTrackChange: TrackChangeCallback | null = null;
+  private onPreloadStateChange: PreloadStateCallback | null = null;
   
   // Animation frame for time updates
   private rafId: number | null = null;
   // Prevent onended from firing callbacks on manual stops
   private suppressOnEnded: boolean = false;
+
+  // Preload control
+  private nextFetchController: AbortController | null = null;
+  private currentPreloadTrackId: string | null = null;
 
   constructor() {
     // Initialize Web Audio API context
@@ -114,10 +126,12 @@ export class GaplessAudioEngine {
     onStateChange?: StateChangeCallback;
     onTrackEnd?: TrackEndCallback;
     onTrackChange?: TrackChangeCallback;
+    onPreloadStateChange?: PreloadStateCallback;
   }) {
     this.onStateChange = callbacks.onStateChange || null;
     this.onTrackEnd = callbacks.onTrackEnd || null;
     this.onTrackChange = callbacks.onTrackChange || null;
+    this.onPreloadStateChange = callbacks.onPreloadStateChange || null;
   }
 
   /**
@@ -127,6 +141,7 @@ export class GaplessAudioEngine {
     this.currentTrack = track;
     
     // Clean up any scheduled transitions from previous track
+    this.cancelNextPreload('switch-track');
     if (this.nextSource) {
       try {
         this.nextSource.stop();
@@ -169,19 +184,58 @@ export class GaplessAudioEngine {
    * Preload next track for gapless playback
    */
   async preloadNextTrack(track: Track): Promise<void> {
+    this.cancelNextPreload('new-request');
     this.nextTrack = track;
+    this.currentPreloadTrackId = track.id;
+
+    const controller = new AbortController();
+    this.nextFetchController = controller;
+
+    this.notifyPreloadState({
+      trackId: track.id,
+      status: 'loading',
+      isCloud: track.isCloud,
+    });
     
     try {
-      const response = await fetch(track.url);
+      const response = await fetch(track.url, { signal: controller.signal });
       const arrayBuffer = await response.arrayBuffer();
       const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
       
+      if (controller.signal.aborted) {
+        return;
+      }
+
       this.nextBuffer = audioBuffer;
+      this.nextFetchController = null;
+      this.currentPreloadTrackId = null;
       console.log(`Preloaded next track: ${track.id}`);
+      this.notifyPreloadState({
+        trackId: track.id,
+        status: 'ready',
+        isCloud: track.isCloud,
+      });
       this.scheduleNextTrackPlayback();
       
     } catch (error) {
+      if ((error as any)?.name === 'AbortError') {
+        this.notifyPreloadState({
+          trackId: track.id,
+          status: 'idle',
+          message: 'Preload aborted',
+          isCloud: track.isCloud,
+        });
+        return;
+      }
+      this.nextFetchController = null;
+      this.currentPreloadTrackId = null;
       console.error('Error preloading next track:', error);
+      this.notifyPreloadState({
+        trackId: track.id,
+        status: 'error',
+        message: (error as Error)?.message || 'Failed to preload',
+        isCloud: track.isCloud,
+      });
     }
   }
 
@@ -530,6 +584,17 @@ export class GaplessAudioEngine {
     }
   }
 
+  private notifyPreloadState(state: {
+    trackId: string;
+    status: 'idle' | 'loading' | 'ready' | 'error';
+    message?: string;
+    isCloud?: boolean;
+  }): void {
+    if (this.onPreloadStateChange) {
+      this.onPreloadStateChange(state);
+    }
+  }
+
   /**
    * Clean up resources
    */
@@ -538,6 +603,7 @@ export class GaplessAudioEngine {
       cancelAnimationFrame(this.rafId);
     }
 
+    this.cancelNextPreload('destroy');
     this.clearScheduledTransitions();
 
     if (this.currentSource) {
@@ -616,5 +682,25 @@ export class GaplessAudioEngine {
     }
 
     this.scheduledNextTrack = false;
+  }
+
+  private cancelNextPreload(reason?: string): void {
+    if (this.nextFetchController) {
+      try {
+        this.nextFetchController.abort();
+      } catch (e) {
+        // Ignore abort errors
+      }
+    }
+    if (this.currentPreloadTrackId) {
+      this.notifyPreloadState({
+        trackId: this.currentPreloadTrackId,
+        status: 'idle',
+        message: reason,
+        isCloud: this.nextTrack?.isCloud,
+      });
+    }
+    this.nextFetchController = null;
+    this.currentPreloadTrackId = null;
   }
 }

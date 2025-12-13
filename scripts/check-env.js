@@ -1,3 +1,5 @@
+require('dotenv').config({ path: '.env.local' });
+
 const required = [
   'VITE_GOOGLE_CLIENT_ID',
   'VITE_ONEDRIVE_CLIENT_ID'

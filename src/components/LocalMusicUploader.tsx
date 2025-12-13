@@ -3,7 +3,7 @@
 
 import { Upload, Music, Trash2, Play, Pause, Album, ListMusic, FolderOpen, Cloud } from 'lucide-react';
 import { parseRemoteMetadataFromUrl } from '../utils/cloudMetadata';
-import { generateCodeVerifier, generateCodeChallenge, buildGoogleAuthUrl, exchangeGoogleCodeForToken, buildMicrosoftAuthUrl, exchangeMicrosoftCodeForToken, refreshGoogleAccessToken, refreshMicrosoftAccessToken } from '../utils/cloudAuth';
+import { generateCodeVerifier, generateCodeChallenge, buildGoogleAuthUrl, exchangeGoogleCodeForToken, buildMicrosoftAuthUrl, exchangeMicrosoftCodeForToken, refreshGoogleAccessToken, refreshMicrosoftAccessToken, DESKTOP_REDIRECT_URI } from '../utils/cloudAuth';
 import { useState, useRef, useEffect } from 'react';
 import { openBrickDB } from '../utils/db';
 // Import jsmediatags via UMD bundle to satisfy Vite/Tauri resolver
@@ -783,7 +783,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
 
   const connectGoogleDrive = async () => {
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    const redirectUri = `${location.origin}/oauth_callback.html`;
+    const redirectUri = DESKTOP_REDIRECT_URI;
     if (!clientId) {
       alert('VITE_GOOGLE_CLIENT_ID not set. Please configure a Google OAuth client ID in your environment variables.');
       return;
@@ -831,7 +831,7 @@ export function LocalMusicUploader({ onPlayTrack, onPlayAlbum, currentPlayingId,
 
   const connectOneDrive = async () => {
     const clientId = import.meta.env.VITE_ONEDRIVE_CLIENT_ID;
-    const redirectUri = `${location.origin}/oauth_callback.html`;
+    const redirectUri = DESKTOP_REDIRECT_URI;
     if (!clientId) {
       alert('VITE_ONEDRIVE_CLIENT_ID not set. Please configure OneDrive OAuth client ID in your environment variables.');
       return;

@@ -1,7 +1,7 @@
 import { Cloud, Upload, FolderOpen, Trash2, Play, RefreshCcw } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { openBrickDB } from '../utils/db';
-import { generateCodeVerifier, generateCodeChallenge, buildGoogleAuthUrl, exchangeGoogleCodeForToken, buildMicrosoftAuthUrl, exchangeMicrosoftCodeForToken, refreshGoogleAccessToken, refreshMicrosoftAccessToken } from '../utils/cloudAuth';
+import { generateCodeVerifier, generateCodeChallenge, buildGoogleAuthUrl, exchangeGoogleCodeForToken, buildMicrosoftAuthUrl, exchangeMicrosoftCodeForToken, refreshGoogleAccessToken, refreshMicrosoftAccessToken, DESKTOP_REDIRECT_URI } from '../utils/cloudAuth';
 import { parseRemoteMetadataFromUrl } from '../utils/cloudMetadata';
 
 interface CloudTrack {
@@ -163,7 +163,7 @@ interface CloudMusicConnectorProps {
 
     const handleGoogleDriveConnect = async () => {
       const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-      const redirectUri = `${location.origin}/oauth_callback.html`;
+      const redirectUri = DESKTOP_REDIRECT_URI;
       if (!clientId) {
         alert('VITE_GOOGLE_CLIENT_ID not set. Please configure a Google OAuth client ID.');
         return;
@@ -206,7 +206,7 @@ interface CloudMusicConnectorProps {
 
     const handleOneDriveConnect = async () => {
       const clientId = import.meta.env.VITE_ONEDRIVE_CLIENT_ID;
-      const redirectUri = `${location.origin}/oauth_callback.html`;
+      const redirectUri = DESKTOP_REDIRECT_URI;
       if (!clientId) {
         alert('VITE_ONEDRIVE_CLIENT_ID not set. Please configure OneDrive OAuth client ID.');
         return;

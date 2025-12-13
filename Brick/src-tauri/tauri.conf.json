@@ -45,4 +45,18 @@
   "plugins": {
     "fs": {}
   }
+  ,
+  "tauri": {
+    "bundle": {
+      "identifier": "art.thebrickwall.brick"
+    },
+    "protocols": {
+      "brick": {
+        "scheme": "brick"
+      }
+    },
+    "security": {
+      "csp": null
+    }
+  }
 }
