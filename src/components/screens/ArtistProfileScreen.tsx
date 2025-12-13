@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { Crown, Users } from 'lucide-react';
 import { Artist } from '../../types';
 

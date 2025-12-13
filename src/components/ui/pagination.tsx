@@ -1,12 +1,14 @@
-import * as React from "react";
+/* eslint-disable */
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
   MoreHorizontalIcon,
-} from "lucide-react@0.487.0";
+} from "lucide-react";
+import * as React from "react";
 
+import type { Button} from "./button";
+import { buttonVariants } from "./button";
 import { cn } from "./utils";
-import { Button, buttonVariants } from "./button";
 
 function Pagination({ className, ...props }: React.ComponentProps<"nav">) {
   return (

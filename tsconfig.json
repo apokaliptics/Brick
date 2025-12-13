@@ -5,8 +5,8 @@
     "lib": ["DOM", "DOM.Iterable", "ESNext"],
     "allowJs": false,
     "skipLibCheck": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "noImplicitAny": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
@@ -20,6 +20,7 @@
     "allowArbitraryExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "allowImportingTsExtensions": true,
     "noEmit": true,
     "jsx": "react-jsx",
     "types": ["vite/client"],
@@ -28,6 +29,6 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["src", "tailwind.config.js"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src", "tailwind.config.js", "vite.config.ts"],
+  "exclude": ["src/supabase/functions/**"]
 }

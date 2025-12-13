@@ -1,5 +1,14 @@
 import { openBrickDB } from './db';
 
+interface StoredLocalTrack {
+  file?: Blob;
+  name?: string;
+  artist?: string;
+  album?: string;
+  albumArtist?: string;
+  url?: string;
+}
+
 // Derive artist/album/title from filename heuristics (copied from LocalMusicUploader)
 const stripExtension = (filename: string) => filename.replace(/\.[^.]+$/, '');
 const sanitizeSegment = (s: string) => s.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
@@ -22,57 +31,67 @@ export const deriveFromFilename = (name: string): { artist?: string; album?: str
   return { title: removeTrackNumberPrefix(base) };
 };
 
-export async function repairMetadataInDB(): Promise<{ updated: number; tracks?: any[] }> {
+export async function repairMetadataInDB(): Promise<{ updated: number; tracks?: StoredLocalTrack[] }> {
+  const db = await openBrickDB();
+  const tx = db.transaction(['localTracks'], 'readwrite');
+  const store = tx.objectStore('localTracks');
+  const all = await new Promise<StoredLocalTrack[]>((resolve, reject) => {
+    const req = store.getAll();
+    req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result as StoredLocalTrack[] : []);
+    req.onerror = () => reject(req.error);
+  });
+
+  let updatedCount = 0;
+  for (const t of all) {
+    const filename = t.file instanceof File ? t.file.name : (typeof t.name === 'string' ? t.name : '');
+    const inferred = deriveFromFilename(filename);
+    const artist = typeof t.artist === 'string' ? t.artist : '';
+    const album = typeof t.album === 'string' ? t.album : '';
+    const title = typeof t.name === 'string' ? t.name : '';
+
+    const needsArtist = artist === '' || artist === 'Unknown Artist';
+    const needsAlbum = album === '' || album === 'Unknown Album';
+    const needsTitle = title === '' || /^\d{1,3}[\s._-]/.test(title);
+    const fallbackArtist = inferred.artist ?? (artist !== '' ? artist : undefined);
+    const fallbackAlbum = inferred.album ?? (album !== '' ? album : undefined);
+    const fallbackTitle = inferred.title ?? (title !== '' ? title : undefined);
+    const albumArtist = typeof t.albumArtist === 'string' && t.albumArtist !== ''
+      ? t.albumArtist
+      : (needsArtist ? fallbackArtist : (artist !== '' ? artist : undefined));
+    const next: StoredLocalTrack = {
+      ...t,
+      artist: needsArtist ? fallbackArtist : (artist !== '' ? artist : undefined),
+      album: needsAlbum ? fallbackAlbum : (album !== '' ? album : undefined),
+      name: needsTitle ? fallbackTitle : (title !== '' ? title : undefined),
+      albumArtist,
+    };
+
+    if (next.artist !== t.artist || next.album !== t.album || next.name !== t.name || next.albumArtist !== t.albumArtist) {
+      await new Promise<void>((resolve, reject) => {
+        const putReq = store.put(next);
+        putReq.onsuccess = () => resolve();
+        putReq.onerror = () => reject(putReq.error);
+      });
+      updatedCount += 1;
+    }
+  }
+
+  let tracksWithUrls: StoredLocalTrack[] | undefined;
   try {
-    const db = await openBrickDB();
-    const tx = db.transaction(['localTracks'], 'readwrite');
-    const store = tx.objectStore('localTracks');
-    const all = await new Promise<any[]>((resolve, reject) => {
+    const refreshed = await new Promise<StoredLocalTrack[]>((resolve, reject) => {
       const req = store.getAll();
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result as StoredLocalTrack[] : []);
       req.onerror = () => reject(req.error);
     });
-
-    let updatedCount = 0;
-    for (const t of all) {
-      const inferred = deriveFromFilename(t.file?.name || t.name || '');
-      const needsArtist = !t.artist || t.artist === 'Unknown Artist';
-      const needsAlbum = !t.album || t.album === 'Unknown Album';
-      const needsTitle = !t.name || /^\d{1,3}[\s._-]/.test(t.name);
-      const next = {
-        ...t,
-        artist: needsArtist ? (inferred.artist || t.artist) : t.artist,
-        album: needsAlbum ? (inferred.album || t.album) : t.album,
-        name: needsTitle ? (inferred.title || t.name) : t.name,
-        albumArtist: t.albumArtist || (needsArtist ? (inferred.artist || t.artist) : t.artist),
-      };
-
-      if (next.artist !== t.artist || next.album !== t.album || next.name !== t.name || next.albumArtist !== t.albumArtist) {
-        await new Promise<void>((resolve, reject) => {
-          const putReq = store.put(next);
-          putReq.onsuccess = () => resolve();
-          putReq.onerror = () => reject(putReq.error);
-        });
-        updatedCount += 1;
-      }
-    }
-
-    // Notify UI to refresh
-    try {
-      const refreshed = await new Promise<any[]>((resolve, reject) => {
-        const req = store.getAll();
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      });
-      // Attach URLs if files exist
-      const tracksWithUrls = refreshed.map((track) => ({ ...track, url: track.url || (track.file ? URL.createObjectURL(track.file) : '') }));
-      window.dispatchEvent(new CustomEvent('brick:local-tracks-refreshed', { detail: { count: updatedCount, tracks: tracksWithUrls } }));
-    } catch {}
-
-    console.log(`Repair complete: updated ${updatedCount} tracks`);
-    return { updated: updatedCount, tracks: undefined };
-  } catch (e) {
-    console.error('Repair metadata failed:', e);
-    throw e;
+    tracksWithUrls = refreshed.map((track) => {
+      const hasUrl = typeof track.url === 'string' && track.url !== '';
+      const blobUrl = track.file instanceof Blob ? URL.createObjectURL(track.file) : '';
+      return { ...track, url: hasUrl ? track.url : blobUrl };
+    });
+    window.dispatchEvent(new CustomEvent('brick:local-tracks-refreshed', { detail: { count: updatedCount, tracks: tracksWithUrls } }));
+  } catch {
+    tracksWithUrls = undefined;
   }
+
+  return { updated: updatedCount, tracks: tracksWithUrls };
 }

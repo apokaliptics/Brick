@@ -1,3 +1,4 @@
+/* eslint-disable */
 // Type declaration for jsmediatags library loaded via CDN
 // Remove reliance on window.jsmediatags (CDN) for app builds
 

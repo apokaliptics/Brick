@@ -93,18 +93,22 @@ const resolveOrderFromNormalized = (normalized: string): number | null => {
   return null;
 };
 
-const isPinkFloyd = (track?: Track | null) =>
-  !!track?.artist && track.artist.toLowerCase().includes('pink floyd');
+const isPinkFloyd = (track?: Track | null) => {
+  if (!track || typeof track.artist !== 'string') return false;
+  return track.artist.toLowerCase().includes('pink floyd');
+};
 
-const isTheWallAlbum = (track?: Track | null) =>
-  !!track?.album && track.album.toLowerCase().includes('the wall');
+const isTheWallAlbum = (track?: Track | null) => {
+  if (!track || typeof track.album !== 'string') return false;
+  return track.album.toLowerCase().includes('the wall');
+};
 
 export const isWallAlbumTrack = (track?: Track | null) => isPinkFloyd(track) && isTheWallAlbum(track);
 
 export const getWallTrackOrder = (track?: Track | null): number | null => {
   if (!track) return null;
-  const titleCandidate = track.title || track.name;
-  if (!titleCandidate) return null;
+  const titleCandidate = track.title ?? track.name;
+  if (typeof titleCandidate !== 'string' || titleCandidate.trim() === '') return null;
   const normalized = normalizeTitle(titleCandidate);
   return resolveOrderFromNormalized(normalized);
 };

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Track } from '../types';
-import type { AudioMeta } from '../utils/audioMetadata';
-import { extractAudioMeta } from '../utils/audioMetadata';
 import { inferCodecLabel } from '../utils/audioMetaHelpers';
+import { extractAudioMeta } from '../utils/audioMetadata';
+import type { AudioMeta } from '../utils/audioMetadata';
 
 const normalizeNumber = (value?: number | string | null): number | undefined => {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -19,7 +19,7 @@ const normalizeNumber = (value?: number | string | null): number | undefined => 
 
 const normalizeSampleRate = (value?: number | string | null): number | undefined => {
   const normalized = normalizeNumber(value);
-  if (!normalized) return undefined;
+  if (normalized === undefined) return undefined;
   if (normalized > 1000) {
     // Convert Hz to kHz when callers store raw sample rate
     return Math.round((normalized / 1000) * 10) / 10;
@@ -28,8 +28,8 @@ const normalizeSampleRate = (value?: number | string | null): number | undefined
 };
 
 const needsExtraction = (meta: AudioMeta | null): boolean => {
-  if (!meta) return true;
-  return !meta.bitDepth || !meta.sampleRate || !meta.bitrateKbps || !meta.codecLabel;
+  if (meta === null) return true;
+  return meta.bitDepth === undefined || meta.sampleRate === undefined || meta.bitrateKbps === undefined || meta.codecLabel === undefined;
 };
 
 const mergeMeta = (base: AudioMeta | null, update: AudioMeta): AudioMeta => ({
@@ -52,15 +52,20 @@ export function useTrackAudioMeta(track: Track | null): AudioMeta | null {
       codecLabel: track.codecLabel,
     });
 
-    if (!bitDepth && !sampleRate && !bitrateKbps && !codecLabel) {
+    const hasBitDepth = bitDepth !== undefined;
+    const hasSampleRate = sampleRate !== undefined;
+    const hasBitrate = bitrateKbps !== undefined;
+    const hasCodec = codecLabel !== undefined && codecLabel !== '';
+
+    if (!hasBitDepth && !hasSampleRate && !hasBitrate && !hasCodec) {
       return null;
     }
 
     return {
-      bitDepth: bitDepth || undefined,
-      sampleRate: sampleRate || undefined,
-      bitrateKbps: bitrateKbps || undefined,
-      codecLabel: codecLabel || undefined,
+      bitDepth,
+      sampleRate,
+      bitrateKbps,
+      codecLabel,
     };
   }, [track]);
 
@@ -71,24 +76,27 @@ export function useTrackAudioMeta(track: Track | null): AudioMeta | null {
   }, [baseMeta]);
 
   useEffect(() => {
-    if (!track) return;
-    if (!track.file && !track.audioUrl) return;
+    if (track === null) return;
+    const hasFile = Boolean(track.file);
+    const hasUrl = typeof track.audioUrl === 'string' && track.audioUrl !== '';
+    if (!hasFile && !hasUrl) return;
     if (!needsExtraction(resolvedMeta)) return;
 
     let cancelled = false;
-    const source = track.file ?? track.audioUrl!;
+    const source = track.file ?? track.audioUrl;
+    if (source === null || source === undefined) return;
 
     const enrichMeta = async () => {
       try {
         const extracted = await extractAudioMeta(source);
-        if (cancelled || !extracted) return;
+        if (cancelled || extracted === null || extracted === undefined) return;
         setResolvedMeta((prev) => mergeMeta(prev, extracted));
       } catch (error) {
         console.warn('Failed to extract audio metadata:', error);
       }
     };
 
-    enrichMeta();
+    void enrichMeta();
 
     return () => {
       cancelled = true;

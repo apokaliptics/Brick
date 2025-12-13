@@ -1,4 +1,4 @@
-import { User, Artist, Playlist, Connection, FeedEvent, Track } from '../types';
+import type { User, Artist, Playlist, Connection, FeedEvent, Track } from '../types';
 
 export const mockCurrentUser: User = {
   id: 'user-1',

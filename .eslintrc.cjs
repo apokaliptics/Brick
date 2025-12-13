@@ -5,8 +5,9 @@ module.exports = {
   parserOptions: {
     ecmaVersion: 2022,
     sourceType: 'module',
-    project: ['./tsconfig.json'],
+    project: ['./tsconfig.json', './tsconfig.node.json'],
   },
+  ignorePatterns: ['src/supabase/functions/**'],
   plugins: ['@typescript-eslint', 'import'],
   extends: [
     'eslint:recommended',
@@ -30,6 +31,7 @@ module.exports = {
     '@typescript-eslint/no-unsafe-member-access': 'warn',
     '@typescript-eslint/consistent-type-imports': 'error',
     '@typescript-eslint/explicit-module-boundary-types': 'off',
+    '@typescript-eslint/ban-ts-comment': 'off',
     'no-console': ['error', { allow: ['warn', 'error'] }],
     'no-debugger': 'error',
     'import/order': ['error', { 'alphabetize': { order: 'asc' }, 'groups': ['builtin','external','internal','parent','sibling','index'] }],
@@ -40,6 +42,13 @@ module.exports = {
     {
       files: ['*.ts', '*.tsx'],
       rules: {}
+    },
+    {
+      files: ['vite.config.ts'],
+      parserOptions: {
+        project: ['./tsconfig.node.json'],
+        tsconfigRootDir: __dirname,
+      },
     }
   ]
 };

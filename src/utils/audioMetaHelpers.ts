@@ -46,8 +46,10 @@ const MIME_KEYWORDS: Array<[string, string]> = [
   ['webm', 'WEBM'],
 ];
 
+const isNonEmpty = (value?: string | null): value is string => value !== undefined && value !== null && value !== '';
+
 const matchKeyword = (value: string | undefined, table: Array<[string, string]>) => {
-  if (!value) return undefined;
+  if (!isNonEmpty(value)) return undefined;
   const upper = value.toUpperCase();
   for (const [keyword, label] of table) {
     if (upper.includes(keyword)) return label;
@@ -56,7 +58,7 @@ const matchKeyword = (value: string | undefined, table: Array<[string, string]>)
 };
 
 const matchMime = (mime?: string) => {
-  if (!mime) return undefined;
+  if (!isNonEmpty(mime)) return undefined;
   const lower = mime.toLowerCase();
   for (const [keyword, label] of MIME_KEYWORDS) {
     if (lower.includes(keyword)) return label;
@@ -65,7 +67,7 @@ const matchMime = (mime?: string) => {
 };
 
 const extFromName = (input?: string): string | undefined => {
-  if (!input) return undefined;
+  if (!isNonEmpty(input)) return undefined;
   const clean = input.split('?')[0].split('#')[0];
   const idx = clean.lastIndexOf('.');
   if (idx === -1) return undefined;
@@ -74,28 +76,29 @@ const extFromName = (input?: string): string | undefined => {
 
 const labelFromExtension = (input?: string) => {
   const ext = extFromName(input);
-  return ext ? EXTENSION_TABLE[ext] : undefined;
+  if (!isNonEmpty(ext)) return undefined;
+  return EXTENSION_TABLE[ext];
 };
 
 export function inferCodecLabel(opts: { file?: File; url?: string; qualityHint?: string; codecLabel?: string }): string | undefined {
-  if (opts.codecLabel) return opts.codecLabel;
+  if (isNonEmpty(opts.codecLabel)) return opts.codecLabel;
   const quality = matchKeyword(opts.qualityHint, QUALITY_KEYWORDS);
-  if (quality) return quality;
+  if (quality !== undefined) return quality;
   if (opts.file) {
     const fileMime = matchMime(opts.file.type);
-    if (fileMime) return fileMime;
+    if (isNonEmpty(fileMime)) return fileMime;
     const fromFileName = labelFromExtension(opts.file.name);
-    if (fromFileName) return fromFileName;
+    if (isNonEmpty(fromFileName)) return fromFileName;
   }
-  if (opts.url) {
+  if (isNonEmpty(opts.url)) {
     const fromUrl = labelFromExtension(opts.url);
-    if (fromUrl) return fromUrl;
+    if (isNonEmpty(fromUrl)) return fromUrl;
   }
   return undefined;
 }
 
 export function formatBitrate(bitrateKbps?: number): string | null {
-  if (!bitrateKbps) return null;
+  if (bitrateKbps === undefined || bitrateKbps === null || Number.isNaN(bitrateKbps)) return null;
   const rounded = Math.round(bitrateKbps);
   return `${rounded.toLocaleString()} kbps`;
 }

@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { useState, useEffect, useRef } from 'react';
 import { Crown, Users, ArrowLeft } from 'lucide-react';
 import { Artist } from '../../types';

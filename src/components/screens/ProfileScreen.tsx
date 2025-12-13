@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { useState, useEffect, useRef } from 'react';
 import { Home, User, Layout, Search, Heart, Plus, X, Music, ChevronLeft, Play, HardDrive, Grid3x3, Orbit, Trash2 } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';

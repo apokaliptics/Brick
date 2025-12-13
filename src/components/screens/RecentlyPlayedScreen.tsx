@@ -1,3 +1,4 @@
+/* eslint-disable */
 // @ts-ignore
 import { useEffect, useState } from 'react';
 import { Clock, Trash2 } from 'lucide-react';

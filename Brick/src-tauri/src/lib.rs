@@ -1,5 +1,5 @@
 use image::{codecs::jpeg::JpegEncoder, imageops::FilterType, ImageEncoder};
-use lofty::{Accessor, AudioFile, Probe};
+use lofty::{Accessor, AudioFile, Probe, TaggedFileExt};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use std::{
     fs::File,
@@ -8,7 +8,8 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tauri::{path::app_data_dir, Emitter, State};
+use tauri::{Emitter, State};
+use dirs::data_dir;
 use sha2::{Digest, Sha256};
 
 /// Shared audio playback state managed on the Rust side.
@@ -164,7 +165,7 @@ fn cache_cover_jpg(app: &tauri::AppHandle, picture_bytes: &[u8]) -> Option<Strin
     hasher.update(picture_bytes);
     let hash = format!("{:x}", hasher.finalize());
 
-    let mut covers_dir: PathBuf = app_data_dir(app.config())?;
+    let mut covers_dir: PathBuf = data_dir()?;
     covers_dir.push("covers");
     std::fs::create_dir_all(&covers_dir).ok()?;
 
@@ -208,7 +209,7 @@ fn scan_music_file(app: tauri::AppHandle, file_path: String) -> Result<SongMetad
         album = tag.album().map(|s| s.to_string());
 
         if let Some(picture) = tag.pictures().first() {
-            cover_art_path = cache_cover_jpg(&app, &picture.data);
+            cover_art_path = cache_cover_jpg(&app, &picture.data());
         }
     }
 

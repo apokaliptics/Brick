@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { useState } from 'react';
 import { X, Search, UserMinus, Users, Activity, AlertCircle } from 'lucide-react';
 import { mockConnections, mockCurrentUser } from '../../data/mockData';

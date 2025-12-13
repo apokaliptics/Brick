@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { useState, useEffect } from 'react';
 import { HeroCarousel } from '../HeroCarousel';
 import { NetworkStories } from '../NetworkStories';

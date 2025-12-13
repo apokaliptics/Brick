@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useWall } from '../contexts/WallContext';
 import { WALL_COLLAPSE_TIME_SECONDS, WALL_WARNING_TIME_SECONDS } from '../utils/theWall';

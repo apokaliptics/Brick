@@ -1,4 +1,4 @@
-import { User } from '../types';
+import type { User } from '../types';
 
 interface StoredUser {
   id: string;
@@ -18,6 +18,21 @@ const DB_NAME = 'BrickAuthDB';
 const DB_VERSION = 1;
 const USERS_STORE = 'users';
 const CURRENT_USER_KEY = 'currentUser';
+
+const isStoredUser = (value: unknown): value is StoredUser => {
+  if (value === null || value === undefined || typeof value !== 'object') return false;
+  const candidate = value as Partial<StoredUser>;
+  return typeof candidate.id === 'string'
+    && typeof candidate.email === 'string'
+    && typeof candidate.password === 'string'
+    && typeof candidate.name === 'string'
+    && typeof candidate.avatar === 'string'
+    && typeof candidate.diversityScore === 'number'
+    && typeof candidate.connectionsUsed === 'number'
+    && typeof candidate.connectionsMax === 'number'
+    && typeof candidate.tier === 'string'
+    && typeof candidate.createdAt === 'number';
+};
 
 // Open IndexedDB for user storage
 const openAuthDB = (): Promise<IDBDatabase> => {
@@ -64,7 +79,10 @@ export const registerUser = async (email: string, password: string, name: string
     const index = store.index('email');
     const existingUser = await new Promise<StoredUser | undefined>((resolve) => {
       const request = index.get(email);
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        const result: unknown = request.result;
+        resolve(isStoredUser(result) ? result : undefined);
+      };
       request.onerror = () => resolve(undefined);
     });
     
@@ -131,7 +149,10 @@ export const loginUser = async (email: string, password: string): Promise<User> 
     
     const storedUser = await new Promise<StoredUser | undefined>((resolve) => {
       const request = index.get(email);
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        const result: unknown = request.result;
+        resolve(isStoredUser(result) ? result : undefined);
+      };
       request.onerror = () => resolve(undefined);
     });
     
@@ -172,7 +193,7 @@ export const loginUser = async (email: string, password: string): Promise<User> 
 export const getCurrentUser = (): User | null => {
   try {
     const userJson = localStorage.getItem(CURRENT_USER_KEY);
-    if (!userJson) return null;
+    if (userJson === null) return null;
     return JSON.parse(userJson) as User;
   } catch (error) {
     console.error('Error getting current user:', error);
@@ -194,7 +215,10 @@ export const updateUser = async (user: User): Promise<void> => {
     
     const storedUser = await new Promise<StoredUser | undefined>((resolve) => {
       const request = store.get(user.id);
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        const result: unknown = request.result;
+        resolve(isStoredUser(result) ? result : undefined);
+      };
       request.onerror = () => resolve(undefined);
     });
     

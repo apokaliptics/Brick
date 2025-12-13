@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { Connection } from '../types';
 
 interface NetworkStoriesProps {

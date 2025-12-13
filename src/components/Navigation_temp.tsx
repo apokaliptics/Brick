@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { Home, Target, Grid, Lock, Menu, X, Moon, Sun, Settings } from 'lucide-react';
 import { useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';

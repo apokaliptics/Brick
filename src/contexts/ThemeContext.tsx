@@ -1,5 +1,5 @@
-// @ts-ignore
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
+import type { ReactNode } from 'react';
 
 type Theme = 'light' | 'dark';
 
@@ -77,7 +77,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    // @ts-ignore
     <ThemeContext.Provider value={{ theme, toggleTheme, isDark, colors }}>
       {children}
     </ThemeContext.Provider>

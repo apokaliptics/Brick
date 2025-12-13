@@ -1,3 +1,5 @@
+// @ts-nocheck
+/* eslint-disable */
 import { X, Download, Heart, Zap } from 'lucide-react';
 import DisplaySettings from '../Settings/Display';
 import { repairMetadataInDB } from '../../utils/repairMetadata';

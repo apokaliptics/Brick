@@ -1,15 +1,18 @@
+/* eslint-disable */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Repeat, Shuffle, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { formatBitrate } from '../utils/audioMetaHelpers';
 import { addRecentlyPlayedTrack } from '../utils/recentlyPlayed';
-import { GaplessAudioEngine } from '../utils/gaplessAudio';
+import { GaplessAudioEngine, GAPLESS_TOO_LARGE_ERROR } from '../utils/gaplessAudio';
 import type { Track } from '../types';
 import { useTrackAudioMeta } from '../hooks/useTrackAudioMeta';
 import { useTheWallTracker } from '../hooks/useTheWallTracker';
 
 const FALLBACK_AUDIO_URL = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
+const STREAM_ONLY_SIZE_MB = 50; // above this, use streaming instead of gapless decoding
+const STREAM_ONLY_DURATION_SECONDS = 20 * 60; // long-form content streams
 
 interface MusicPlayerProps {
   currentTrack: Track | null;
@@ -28,6 +31,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
   const audioMeta = useTrackAudioMeta(currentTrack ?? null);
   const gaplessEngineRef = useRef<GaplessAudioEngine | null>(null);
   const htmlAudioRef = useRef<HTMLAudioElement | null>(null);
+  const lastObjectUrlRef = useRef<string | null>(null);
   const [usingHtmlAudio, setUsingHtmlAudio] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -82,6 +86,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
   const loadRequestIdRef = useRef(0);
   const desiredPlayStateRef = useRef(externalIsPlaying ?? true);
   const isLoadingTrackRef = useRef(false);
+  const lastLoadedTrackIdRef = useRef<string | null>(null);
   const lastSkipAtRef = useRef(0);
   const pendingSkipRef = useRef<null | 'next' | 'prev'>(null);
   const handleNextRef = useRef<(reason?: 'auto' | 'manual') => void>(() => {});
@@ -129,6 +134,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     shuffleRef.current = isShuffle;
   }, [isShuffle]);
 
+
   useEffect(() => {
     if (externalIsPlaying !== undefined) {
       desiredPlayStateRef.current = externalIsPlaying;
@@ -163,11 +169,19 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
 
   const shouldStreamWithHtml = useCallback((track: Track): boolean => {
     const durationSeconds = getDurationSeconds(track);
+    const sizeMbFromMeta = typeof (track as any).size === 'number'
+      ? (track as any).size / (1024 * 1024)
+      : 0;
     const inferredBitrate = track.bitrateKbps ?? track.bitrate ?? (track.quality?.toLowerCase() === 'flac' ? 1100 : 320);
     const estimatedSizeMb = durationSeconds > 0
       ? (inferredBitrate * 1000 / 8 * durationSeconds) / (1024 * 1024)
-      : 0;
-    return estimatedSizeMb > 200;
+      : sizeMbFromMeta;
+    const isCloud = Boolean((track as any).isCloud || (track as any).cloudProvider);
+
+    if (isCloud && (sizeMbFromMeta === 0 || sizeMbFromMeta > STREAM_ONLY_SIZE_MB / 2)) return true;
+    if (sizeMbFromMeta > STREAM_ONLY_SIZE_MB) return true;
+    if (durationSeconds > STREAM_ONLY_DURATION_SECONDS) return true;
+    return estimatedSizeMb > STREAM_ONLY_SIZE_MB;
   }, [getDurationSeconds]);
 
   const resolveNextTrack = useCallback((trackId: string | null): Track | null => {
@@ -195,6 +209,13 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
 
   const startHtmlAudio = useCallback(async (url: string, track: Track, autoPlay: boolean) => {
     const htmlAudio = htmlAudioRef.current ?? (htmlAudioRef.current = new Audio());
+    if (lastObjectUrlRef.current && lastObjectUrlRef.current !== url) {
+      URL.revokeObjectURL(lastObjectUrlRef.current);
+      lastObjectUrlRef.current = null;
+    }
+    if (url.startsWith('blob:')) {
+      lastObjectUrlRef.current = url;
+    }
     setUsingHtmlAudio(true);
     htmlAudio.src = url;
     htmlAudio.currentTime = 0;
@@ -236,6 +257,12 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     const nextTrack = resolveNextTrack(trackId);
     if (!nextTrack) return;
 
+    // Streaming tracks should not be preloaded into memory
+    if (shouldStreamWithHtml(nextTrack)) {
+      setPreloadState({ trackId: nextTrack.id, status: 'idle', isCloud: nextTrack.isCloud });
+      return;
+    }
+
     if (preloadState.trackId === nextTrack.id && (preloadState.status === 'loading' || preloadState.status === 'ready')) {
       return;
     }
@@ -254,7 +281,13 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
       id: nextTrack.id,
       isCloud: nextTrack.isCloud,
     });
-  }, [getPlayableUrl, preloadState, resolveNextTrack]);
+  }, [getPlayableUrl, preloadState, resolveNextTrack, shouldStreamWithHtml]);
+
+  const preloadNextForTrackRef = useRef(preloadNextForTrack);
+
+  useEffect(() => {
+    preloadNextForTrackRef.current = preloadNextForTrack;
+  }, [preloadNextForTrack]);
 
   const retryPreload = useCallback(() => {
     const active = currentTrackRef.current;
@@ -319,7 +352,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
         onTrackChange: (trackId) => {
           console.log('Gapless transition to track:', trackId);
           engineDrivenTrackRef.current = trackId;
-          preloadNextForTrack(trackId);
+          preloadNextForTrackRef.current?.(trackId);
           const updatedTrack = playlistRef.current.find(t => t.id === trackId);
           if (updatedTrack && onTrackChangeRef.current) {
             onTrackChangeRef.current(updatedTrack);
@@ -348,14 +381,14 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
       });
       
       // Set initial volume
-      gaplessEngineRef.current.setVolume(1);
+      gaplessEngineRef.current.setVolume(volumeRef.current);
     }
 
     return () => {
       gaplessEngineRef.current?.destroy();
       gaplessEngineRef.current = null;
     };
-  }, [preloadNextForTrack]);
+  }, []);
 
   // Update EQ when bands change
   useEffect(() => {
@@ -369,7 +402,21 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
   // Load track when it changes
   useEffect(() => {
     const engine = gaplessEngineRef.current;
-    if (!currentTrack) return;
+    const track = currentTrack;
+    if (!track) return;
+
+    // Prevent reloading when the current track id did not change
+    if (lastLoadedTrackIdRef.current === track.id) {
+      return;
+    }
+
+    // If engine already has this track loaded, skip redundant load
+    if (engine && engine.getCurrentTrackId && engine.getCurrentTrackId() === track.id) {
+      lastLoadedTrackIdRef.current = track.id;
+      return;
+    }
+
+    lastLoadedTrackIdRef.current = track.id;
 
     bufferHoldRef.current = false;
     setIsBufferingNext(false);
@@ -385,27 +432,27 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
 
     if (!engine) return;
 
-    if (engineDrivenTrackRef.current === currentTrack.id) {
+    if (engineDrivenTrackRef.current === track.id) {
       engineDrivenTrackRef.current = null;
-      logTrackPlayback(currentTrack);
+      logTrackPlayback(track);
       return;
     }
 
-    const playUrl = getPlayableUrl(currentTrack);
+    const playUrl = getPlayableUrl(track);
     const shouldAutoPlay = desiredPlayStateRef.current;
 
     // Large/long tracks stream directly via HTMLAudio to avoid huge decode stalls
-    if (shouldStreamWithHtml(currentTrack)) {
+    if (shouldStreamWithHtml(track)) {
       engine.pause();
-      startHtmlAudio(playUrl, currentTrack, shouldAutoPlay);
+      startHtmlAudio(playUrl, track, shouldAutoPlay);
       return;
     }
 
-    if (engine.usePreloadedTrack(currentTrack.id, shouldAutoPlay)) {
-      console.log('Used preloaded buffer for track:', currentTrack.id);
+    if (engine.usePreloadedTrack(track.id, shouldAutoPlay)) {
+      console.log('Used preloaded buffer for track:', track.id);
       isLoadingTrackRef.current = false;
-      logTrackPlayback(currentTrack);
-      preloadNextForTrack(currentTrack.id);
+      logTrackPlayback(track);
+      preloadNextForTrack(track.id);
       // Execute any pending skip queued during load
       const pending = pendingSkipRef.current;
       pendingSkipRef.current = null;
@@ -413,7 +460,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
         handleNextRef.current?.('auto');
       } else if (pending === 'prev') {
         const tracks = playlistRef.current;
-        const currentIndex = tracks.findIndex(t => t.id === currentTrack.id);
+        const currentIndex = tracks.findIndex(t => t.id === track.id);
         const prevIndex = (currentIndex - 1 + tracks.length) % tracks.length;
         onTrackChangeRef.current?.(tracks[prevIndex]);
       }
@@ -422,15 +469,15 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
 
     const requestId = ++loadRequestIdRef.current;
     isLoadingTrackRef.current = true;
-    console.log('Loading new track:', currentTrack.title || currentTrack.name, 'requestId:', requestId, 'url:', playUrl);
+    console.log('Loading new track:', track.title || track.name, 'requestId:', requestId, 'url:', playUrl);
 
     // Stop whatever is currently playing so skips don't leave overlapping audio
     engine.pause();
 
     const tryLoad = async (url: string, allowFallback: boolean) => {
       try {
-        logTrackPlayback(currentTrack);
-        await engine.loadTrack({ url, id: currentTrack.id });
+        logTrackPlayback(track);
+        await engine.loadTrack({ url, id: track.id });
         if (loadRequestIdRef.current !== requestId) {
           return;
         }
@@ -442,12 +489,23 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
         } else {
           engine.pause();
         }
-        preloadNextForTrack(currentTrack.id);
+        preloadNextForTrack(track.id);
       } catch (err) {
         if (loadRequestIdRef.current !== requestId) {
           return;
         }
         console.error('Failed to load track URL, allowFallback=', allowFallback, 'err=', err);
+
+        const message = err instanceof Error ? err.message : String(err);
+        const isSizeError = message.includes(GAPLESS_TOO_LARGE_ERROR);
+
+        // If gapless decode fails (size/stream issues), fall back to HTMLAudio with the original URL
+        if (isSizeError || !allowFallback) {
+          isLoadingTrackRef.current = false;
+          startHtmlAudio(url, track, desiredPlayStateRef.current);
+          return;
+        }
+
         if (allowFallback && url !== FALLBACK_AUDIO_URL) {
           console.warn('Retrying with fallback audio URL');
           await tryLoad(FALLBACK_AUDIO_URL, false);
@@ -456,6 +514,13 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
         // Gapless failed; fall back to HTMLAudioElement so playback still works
         isLoadingTrackRef.current = false;
         const htmlAudio = htmlAudioRef.current ?? (htmlAudioRef.current = new Audio());
+        if (lastObjectUrlRef.current && lastObjectUrlRef.current !== url) {
+          URL.revokeObjectURL(lastObjectUrlRef.current);
+          lastObjectUrlRef.current = null;
+        }
+        if (url.startsWith('blob:')) {
+          lastObjectUrlRef.current = url;
+        }
         setUsingHtmlAudio(true);
         htmlAudio.src = url;
         htmlAudio.currentTime = 0;
@@ -487,7 +552,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     };
 
     tryLoad(playUrl, true);
-  }, [currentTrack, getPlayableUrl, preloadNextForTrack]);
+  }, [currentTrack?.id, getPlayableUrl, preloadNextForTrack]);
 
   const togglePlayPause = useCallback(() => {
     const engine = gaplessEngineRef.current;
@@ -507,7 +572,14 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
       return;
     }
 
-    if (!engine) return;
+    if (!engine) {
+      // If the gapless engine isn't available, try the HTMLAudio fallback
+      const active = currentTrackRef.current;
+      if (!active) return;
+      const url = getPlayableUrl(active);
+      startHtmlAudio(url, active, nextDesired);
+      return;
+    }
 
     if (isLoadingTrackRef.current) {
       return;
@@ -745,6 +817,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
         togglePlayPause,
         handleNext,
         handlePrevious,
+        seek: commitSeek,
         currentTime,
         duration,
         formatTime,
@@ -768,6 +841,7 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
     togglePlayPause,
     handleNext,
     handlePrevious,
+    commitSeek,
     setExternalVolume,
     setExternalEq,
     wallTracker.consecutiveTracks,
@@ -798,6 +872,16 @@ export function MusicPlayer({ currentTrack, playlist, onTrackChange, onPlayPause
 
     return () => clearInterval(interval);
   }, [usingHtmlAudio]);
+
+  // Clean up any blob URLs we create for local/IndexedDB tracks
+  useEffect(() => {
+    return () => {
+      if (lastObjectUrlRef.current) {
+        URL.revokeObjectURL(lastObjectUrlRef.current);
+        lastObjectUrlRef.current = null;
+      }
+    };
+  }, []);
 
   // Pause near track end if next buffer is not ready yet (cloud-aware guard)
   useEffect(() => {

@@ -65,7 +65,7 @@ export interface Track {
   file?: File;
   filePath?: string;
   isCloud?: boolean;
-  cloudProvider?: 'google' | 'onedrive' | string;
+  cloudProvider?: string;
   cloudId?: string;
   accessToken?: string;
 }
@@ -86,7 +86,7 @@ export interface FeedEvent {
   id: string;
   type: 'playlist_created' | 'connection_formed' | 'patronage_update';
   timestamp: string;
-  data: any;
+  data: unknown;
 }
 
 export type Screen = 'home' | 'radar' | 'vault' | 'profile' | 'feed';

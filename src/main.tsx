@@ -5,28 +5,29 @@ import { WallProvider } from './contexts/WallContext.tsx';
 import './index.css';
 
 // Tauri deep link listener: deliver OAuth codes from desktop redirects to the UI via window.postMessage
-try {
-  // Import dynamically so web builds won't fail
-  // @ts-ignore
-  import('@tauri-apps/api/event').then(({ listen }) => {
-    listen('tauri://deep-link', (event: any) => {
+const startDeepLinkListener = async () => {
+  try {
+    const { listen } = await import('@tauri-apps/api/event');
+    await listen('tauri://deep-link', (event: { payload?: unknown } | null) => {
+      const payload = event?.payload;
+      if (typeof payload !== 'string') return;
       try {
-        const url = new URL(event.payload as string);
+        const url = new URL(payload);
         if (url.protocol !== 'brick:') return;
         const code = url.searchParams.get('code');
         const state = url.searchParams.get('state');
-        if (!code) return;
-        window.postMessage({ provider: state, code }, '*');
-      } catch (err) {
-        // Ignore URL parse errors
+        if (code === null || code === '') return;
+        window.postMessage({ provider: state ?? undefined, code }, '*');
+      } catch {
+        // ignore malformed URLs
       }
     });
-  }).catch(() => {
+  } catch {
     // Not running in Tauri environment; ignore
-  });
-} catch (err) {
-  // ignore import failures (web mode)
-}
+  }
+};
+
+void startDeepLinkListener();
 
 createRoot(document.getElementById('root')!).render(
   <ThemeProvider>

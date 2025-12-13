@@ -11,23 +11,33 @@ export interface AudioMeta {
   codecLabel?: string; // e.g., FLAC, WAV, MP3, AAC, ALAC, OPUS
 }
 
-function roundKHz(rateHz?: number): number | undefined {
-  if (!rateHz) return undefined;
+function roundKHz(rateHz?: number | null): number | undefined {
+  if (rateHz === undefined || rateHz === null) return undefined;
   const khz = rateHz / 1000;
   return Math.round(khz * 10) / 10; // one decimal place
 }
 
-function extFromName(name?: string): string | undefined {
-  if (!name) return undefined;
+function safeSampleRate(rateHz?: number | null): number | undefined {
+  if (rateHz === undefined || rateHz === null || Number.isNaN(rateHz)) return undefined;
+  return roundKHz(rateHz);
+}
+
+function safeBitrateKbps(bitrateBps?: number | null): number | undefined {
+  if (bitrateBps === undefined || bitrateBps === null || !Number.isFinite(bitrateBps)) return undefined;
+  return Math.round(bitrateBps / 1000);
+}
+
+function extFromName(name?: string | null): string | undefined {
+  if (name === undefined || name === null || name === '') return undefined;
   const clean = name.split('?')[0].split('#')[0];
   const idx = clean.lastIndexOf('.');
   if (idx === -1) return undefined;
   return clean.substring(idx + 1).toLowerCase();
 }
 
-function labelFromMimeOrExt(mime?: string, ext?: string): string | undefined {
-  const m = (mime || '').toLowerCase();
-  const e = (ext || '').toLowerCase();
+function labelFromMimeOrExt(mime?: string | null, ext?: string | null): string | undefined {
+  const m = (mime ?? '').toLowerCase();
+  const e = (ext ?? '').toLowerCase();
   const table: Record<string, string> = {
     flac: 'FLAC',
     wav: 'WAV',
@@ -62,9 +72,9 @@ function labelFromMimeOrExt(mime?: string, ext?: string): string | undefined {
   return undefined;
 }
 
-function normalizeCodec(container?: string, codec?: string, mime?: string, ext?: string): string | undefined {
-  const c = (container || '').toLowerCase();
-  const k = (codec || '').toLowerCase();
+function normalizeCodec(container?: string | null, codec?: string | null, mime?: string | null, ext?: string | null): string | undefined {
+  const c = (container ?? '').toLowerCase();
+  const k = (codec ?? '').toLowerCase();
   // Prefer precise codec mapping when known
   if (k.includes('flac')) return 'FLAC';
   if (k.includes('alac') || k.includes('apple lossless')) return 'ALAC';
@@ -96,24 +106,30 @@ export async function extractAudioMeta(fileOrUrl: File | string): Promise<AudioM
     if (fileOrUrl instanceof File) {
       const meta = await parseBlob(fileOrUrl);
       const fmt = meta.format;
+      const bitDepth = typeof fmt.bitsPerSample === 'number' && Number.isFinite(fmt.bitsPerSample) ? fmt.bitsPerSample : undefined;
+      const sampleRate = safeSampleRate(fmt.sampleRate);
+      const bitrateKbps = safeBitrateKbps(fmt.bitrate);
       return {
-        bitDepth: fmt.bitsPerSample || undefined,
-        sampleRate: roundKHz(fmt.sampleRate),
-        bitrateKbps: fmt.bitrate ? Math.round(fmt.bitrate / 1000) : undefined,
-        codecLabel: normalizeCodec(fmt.container, fmt.codec, fileOrUrl.type, extFromName(fileOrUrl.name)) || cheapLabel,
+        bitDepth,
+        sampleRate,
+        bitrateKbps,
+        codecLabel: normalizeCodec(fmt.container, fmt.codec, fileOrUrl.type, extFromName(fileOrUrl.name)) ?? cheapLabel,
       };
     } else if (typeof fileOrUrl === 'string') {
       // Fetch as ArrayBuffer (requires CORS for remote URLs)
       const res = await fetch(fileOrUrl, { mode: 'cors' });
       const buf = await res.arrayBuffer();
-      const mimeType = res.headers.get('Content-Type') || undefined;
+      const mimeType = res.headers.get('Content-Type') ?? undefined;
       const meta = await parseBuffer(new Uint8Array(buf), { mimeType, size: buf.byteLength });
       const fmt = meta.format;
+      const bitDepth = typeof fmt.bitsPerSample === 'number' && Number.isFinite(fmt.bitsPerSample) ? fmt.bitsPerSample : undefined;
+      const sampleRate = safeSampleRate(fmt.sampleRate);
+      const bitrateKbps = safeBitrateKbps(fmt.bitrate);
       return {
-        bitDepth: fmt.bitsPerSample || undefined,
-        sampleRate: roundKHz(fmt.sampleRate),
-        bitrateKbps: fmt.bitrate ? Math.round(fmt.bitrate / 1000) : undefined,
-        codecLabel: normalizeCodec(fmt.container, fmt.codec, mimeType, extFromName(fileOrUrl)) || cheapLabel,
+        bitDepth,
+        sampleRate,
+        bitrateKbps,
+        codecLabel: normalizeCodec(fmt.container, fmt.codec, mimeType, extFromName(fileOrUrl)) ?? cheapLabel,
       };
     }
   } catch (e) {
@@ -122,7 +138,7 @@ export async function extractAudioMeta(fileOrUrl: File | string): Promise<AudioM
 
   // Final fallback: estimate bitrate for Files only; avoid fake sample rate.
   return new Promise((resolve) => {
-    let audio = new Audio();
+    const audio = new Audio();
     if (typeof fileOrUrl === 'string') {
       audio.src = fileOrUrl;
     } else {
@@ -133,8 +149,10 @@ export async function extractAudioMeta(fileOrUrl: File | string): Promise<AudioM
       let sampleRate: number | undefined;
       let bitrateKbps: number | undefined;
       try {
-        const Ctx: any = (window as any).AudioContext || (window as any).webkitAudioContext;
-        if (!Ctx) {
+        type AudioContextCtor = new () => AudioContext;
+        const ctxSource = window as typeof window & { webkitAudioContext?: AudioContextCtor };
+        const Ctx = ctxSource.AudioContext ?? ctxSource.webkitAudioContext;
+        if (Ctx === undefined) {
           resolve({ sampleRate, bitrateKbps, codecLabel: cheapLabel });
           return;
         }
@@ -143,14 +161,22 @@ export async function extractAudioMeta(fileOrUrl: File | string): Promise<AudioM
         req.open('GET', audio.src, true);
         req.responseType = 'arraybuffer';
         req.onload = function () {
-          ctx.decodeAudioData(req.response, () => {
-            // Do NOT trust decoded sampleRate (often equals device/AudioContext rate)
-            sampleRate = undefined;
-            if (fileOrUrl instanceof File && audio.duration > 0) {
+          const responseBuffer: unknown = req.response;
+          if (!(responseBuffer instanceof ArrayBuffer)) {
+            resolve({ sampleRate, bitrateKbps, codecLabel: cheapLabel });
+            return;
+          }
+
+          const finishWithBitrate = () => {
+            sampleRate = undefined; // decoded rate matches AudioContext, not the file
+            const hasDuration = Number.isFinite(audio.duration) && audio.duration > 0;
+            if (fileOrUrl instanceof File && hasDuration) {
               bitrateKbps = Math.round((fileOrUrl.size / audio.duration) * 8 / 1000);
             }
             resolve({ sampleRate, bitrateKbps, codecLabel: cheapLabel });
-          }, () => {
+          };
+
+          void ctx.decodeAudioData(responseBuffer, finishWithBitrate, () => {
             resolve({ sampleRate, bitrateKbps, codecLabel: cheapLabel });
           });
         };
@@ -167,10 +193,10 @@ export async function extractAudioMeta(fileOrUrl: File | string): Promise<AudioM
 }
 
 export function formatMetaBadge(meta: AudioMeta): string | null {
-  const depth = meta.bitDepth;
-  const rate = meta.sampleRate; // already kHz
-  if (!depth && !rate) return null;
-  const depthPart = depth ? `${depth}-bit` : undefined;
-  const ratePart = rate ? `${rate}kHz` : undefined;
+  const depth = typeof meta.bitDepth === 'number' && Number.isFinite(meta.bitDepth) ? meta.bitDepth : undefined;
+  const rate = typeof meta.sampleRate === 'number' && Number.isFinite(meta.sampleRate) ? meta.sampleRate : undefined; // already kHz
+  if (depth === undefined && rate === undefined) return null;
+  const depthPart = depth !== undefined ? `${depth}-bit` : undefined;
+  const ratePart = rate !== undefined ? `${rate}kHz` : undefined;
   return [depthPart, ratePart].filter(Boolean).join('/');
 }

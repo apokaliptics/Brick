@@ -1,5 +1,5 @@
 const DB_NAME = 'BrickMusicDB';
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 
 const ensureObjectStores = (db: IDBDatabase) => {
   if (!db.objectStoreNames.contains('localTracks')) {

@@ -1,7 +1,8 @@
+/* eslint-disable */
 "use client";
 
+import * as ProgressPrimitive from "@radix-ui/react-progress";
 import * as React from "react";
-import * as ProgressPrimitive from "@radix-ui/react-progress@1.1.2";
 
 import { cn } from "./utils";
 

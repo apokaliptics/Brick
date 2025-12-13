@@ -1,4 +1,4 @@
-import { openBrickDB, DB_VERSION } from './db';
+import { openBrickDB } from './db';
 
 // Recently Played Playlists Management
 export interface RecentlyPlayedPlaylist {
@@ -18,7 +18,6 @@ export interface RecentlyPlayedPlaylist {
 const STORE_NAME = 'recentlyPlayedPlaylists';
 
 export async function openRecentlyPlayedPlaylistsDB(): Promise<IDBDatabase> {
-  console.log(`Opening recently played playlists DB, version ${DB_VERSION}`);
   return openBrickDB();
 }
 
@@ -49,9 +48,10 @@ export async function getRecentlyPlayedPlaylists(limit = 10): Promise<RecentlyPl
     const request = index.getAll();
 
     request.onsuccess = () => {
-      const playlists = request.result as RecentlyPlayedPlaylist[];
+      const playlists = Array.isArray(request.result) ? request.result as RecentlyPlayedPlaylist[] : [];
       // Sort by playedAt descending and limit (with fallback for undefined values)
-      const sorted = playlists.sort((a, b) => (b.playedAt || 0) - (a.playedAt || 0)).slice(0, limit);
+      const getPlayedAt = (value?: number) => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+      const sorted = playlists.sort((a, b) => getPlayedAt(b.playedAt) - getPlayedAt(a.playedAt)).slice(0, limit);
       resolve(sorted);
     };
 

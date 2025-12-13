@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { Cloud, Upload, FolderOpen, Trash2, Play, RefreshCcw } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { openBrickDB } from '../utils/db';

@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+type TauriAwareWindow = Window & { __TAURI__?: unknown };
+
 export type NativeAudioStatus = "playing" | "paused" | "stopped" | "seeking" | "volume";
 
 export interface NativeAudioEventPayload {
@@ -10,7 +12,7 @@ export interface NativeAudioEventPayload {
   volume?: number;
 }
 
-const hasTauriRuntime = () => typeof window !== "undefined" && Boolean((window as any).__TAURI__);
+const hasTauriRuntime = () => typeof window !== "undefined" && Boolean((window as TauriAwareWindow).__TAURI__);
 
 const requireRuntime = () => {
   if (!hasTauriRuntime()) {

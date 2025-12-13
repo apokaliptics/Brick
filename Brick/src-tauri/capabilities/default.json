@@ -6,10 +6,9 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "fs:read",
-    "path:default",
-    "shell:allow-open",
-    "asset:protocol"
+    "fs:allow-read",
+    "core:path:default",
+    "opener:allow-open-url"
   ],
   "fs": {
     "scope": [

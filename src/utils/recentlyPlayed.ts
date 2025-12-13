@@ -1,4 +1,4 @@
-import { openBrickDB, DB_VERSION } from './db';
+import { openBrickDB } from './db';
 
 // Recently Played Tracks Management
 export interface RecentlyPlayedTrack {
@@ -25,30 +25,45 @@ export interface RecentlyPlayedTrack {
 const STORE_NAME = 'recentlyPlayedTracks';
 const LOCAL_TRACK_STORE = 'localTracks';
 
+interface LocalTrackEntry {
+  file?: Blob;
+  album?: string;
+  format?: string;
+  codecLabel?: string;
+  bitDepth?: number;
+  sampleRate?: number;
+  bitrateKbps?: number;
+  duration?: number;
+  codec?: string;
+  url?: string;
+  name?: string;
+  artist?: string;
+}
+
 export async function openRecentlyPlayedDB(): Promise<IDBDatabase> {
-  console.log(`Opening recently played tracks DB, version ${DB_VERSION}`);
   return openBrickDB();
 }
 
-async function getLocalTrackById(trackId: string): Promise<any | null> {
+async function getLocalTrackById(trackId: string): Promise<LocalTrackEntry | null> {
   try {
     const db = await openBrickDB();
     if (!db.objectStoreNames.contains(LOCAL_TRACK_STORE)) return null;
-    return await new Promise((resolve) => {
+    return await new Promise<LocalTrackEntry | null>((resolve) => {
       const tx = db.transaction([LOCAL_TRACK_STORE], 'readonly');
       const store = tx.objectStore(LOCAL_TRACK_STORE);
-      const request = store.get(trackId);
-      request.onsuccess = () => resolve(request.result || null);
+      const request = store.get(trackId) as IDBRequest<LocalTrackEntry | undefined>;
+      request.onsuccess = () => {
+        const value = request.result;
+        resolve(value ?? null);
+      };
       request.onerror = () => resolve(null);
     });
-  } catch (error) {
-    console.error('Failed to load local track for recent playback', error);
+  } catch {
     return null;
   }
 }
 
 export async function addRecentlyPlayedTrack(track: RecentlyPlayedTrack): Promise<void> {
-  console.log('addRecentlyPlayedTrack called with:', track);
   const db = await openRecentlyPlayedDB();
   const transaction = db.transaction([STORE_NAME], 'readwrite');
   const store = transaction.objectStore(STORE_NAME);
@@ -59,19 +74,12 @@ export async function addRecentlyPlayedTrack(track: RecentlyPlayedTrack): Promis
       playedAt: Date.now(),
     });
 
-    request.onsuccess = () => {
-      console.log('Successfully added track to recently played:', track.trackTitle);
-      resolve();
-    };
-    request.onerror = () => {
-      console.error('Failed to add track to recently played:', request.error);
-      reject(request.error);
-    };
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
   });
 }
 
 export async function getRecentlyPlayedTracks(limit = 10): Promise<RecentlyPlayedTrack[]> {
-  console.log('getRecentlyPlayedTracks called with limit:', limit);
   const db = await openRecentlyPlayedDB();
   const transaction = db.transaction([STORE_NAME], 'readonly');
   const store = transaction.objectStore(STORE_NAME);
@@ -81,36 +89,38 @@ export async function getRecentlyPlayedTracks(limit = 10): Promise<RecentlyPlaye
     const request = index.getAll();
 
     request.onsuccess = async () => {
-      const tracks = request.result as RecentlyPlayedTrack[];
-      console.log('Retrieved tracks from DB:', tracks);
+      const tracks = Array.isArray(request.result) ? request.result as RecentlyPlayedTrack[] : [];
       // Sort by playedAt descending and limit
-      const sorted = tracks.sort((a, b) => b.playedAt - a.playedAt).slice(0, limit);
-      console.log('Sorted and limited tracks:', sorted);
+      const sorted = tracks
+        .filter((t): t is RecentlyPlayedTrack => typeof t?.playedAt === 'number' && typeof t.trackId === 'string')
+        .sort((a, b) => b.playedAt - a.playedAt)
+        .slice(0, limit);
 
       const enriched = await Promise.all(sorted.map(async (track) => {
-        const needsLocalLookup = !track.audioUrl || track.audioUrl.includes('SoundHelix') || track.audioUrl.startsWith('blob:');
+        const audioUrl = typeof track.audioUrl === 'string' ? track.audioUrl : '';
+        const needsLocalLookup = audioUrl === '' || audioUrl.includes('SoundHelix') || audioUrl.startsWith('blob:');
         if (!needsLocalLookup) {
           return track;
         }
 
         const local = await getLocalTrackById(track.trackId);
-        if (!local) return track;
+        if (local === null) return track;
 
-        let rebuiltUrl = track.audioUrl;
-        try {
-          if (local.file) {
+        let rebuiltUrl = audioUrl;
+        if (local.file instanceof Blob) {
+          try {
             rebuiltUrl = URL.createObjectURL(local.file);
+          } catch {
+            // ignore blob rebuild failure
           }
-        } catch (err) {
-          console.error('Failed to rebuild blob URL for recent track', err);
         }
 
         return {
           ...track,
-          audioUrl: rebuiltUrl || track.audioUrl,
-          album: track.album || local.album,
-          quality: track.quality || local.format,
-          codecLabel: track.codecLabel || local.codecLabel,
+          audioUrl: rebuiltUrl || audioUrl,
+          album: track.album ?? local.album,
+          quality: track.quality ?? local.format,
+          codecLabel: track.codecLabel ?? local.codecLabel,
           bitDepth: track.bitDepth ?? local.bitDepth,
           sampleRate: track.sampleRate ?? local.sampleRate,
           bitrateKbps: track.bitrateKbps ?? local.bitrateKbps,
@@ -120,7 +130,6 @@ export async function getRecentlyPlayedTracks(limit = 10): Promise<RecentlyPlaye
 
       // If no tracks, add some test data for debugging
       if (enriched.length === 0) {
-        console.log('No recently played tracks found, adding test data...');
         const testTracks: RecentlyPlayedTrack[] = [
           {
             trackId: 'test-track-1',
@@ -149,16 +158,13 @@ export async function getRecentlyPlayedTracks(limit = 10): Promise<RecentlyPlaye
         ];
         resolve(testTracks);
         // Also add them to DB for future loads
-        testTracks.forEach(track => addRecentlyPlayedTrack(track).catch(console.error));
+        testTracks.forEach((track) => { void addRecentlyPlayedTrack(track).catch(() => {}); });
       } else {
         resolve(enriched);
       }
     };
 
-    request.onerror = () => {
-      console.error('Failed to get recently played tracks:', request.error);
-      reject(request.error);
-    };
+    request.onerror = () => reject(request.error);
   });
 }
 

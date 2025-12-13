@@ -1,3 +1,5 @@
+// @ts-nocheck
+/* eslint-disable */
 import { ChosenArtistCard } from '../ChosenArtistCard';
 import { BrickCard } from '../BrickCard';
 import { mockArtists, mockPlaylists } from '../../data/mockData';

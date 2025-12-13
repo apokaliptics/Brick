@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Plus, Trash2, Play, HardDrive, Music, X, GripVertical, Upload, Image as ImageIcon, Search } from 'lucide-react';

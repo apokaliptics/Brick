@@ -4,7 +4,7 @@
  * Supports LastFM, Spotify, and local libraries
  */
 
-import { Track, Artist } from '../types';
+import type { Track, Artist } from '../types';
 
 
 // Extended comprehensive mock music library (CC licensed tracks concept)
@@ -297,9 +297,9 @@ interface SearchResults {
 /**
  * Search for tracks and artists using mock data (prioritized for reliability)
  */
-export async function searchTracks(options: SearchOptions): Promise<SearchResults> {
+export function searchTracks(options: SearchOptions): Promise<SearchResults> {
   // Always use mock data for guaranteed results
-  return searchTracksMock(options);
+  return Promise.resolve(searchTracksMock(options));
 }
 
 
@@ -309,18 +309,26 @@ export async function searchTracks(options: SearchOptions): Promise<SearchResult
 function searchTracksMock(options: SearchOptions): SearchResults {
   const { query, artist, genre, limit = 10 } = options;
   const lowerQuery = query.toLowerCase();
+  const hasArtistFilter = typeof artist === 'string' && artist !== '';
+  const hasGenreFilter = typeof genre === 'string' && genre !== '';
+  const normalizedArtist = hasArtistFilter ? artist.toLowerCase() : '';
+  const normalizedGenre = hasGenreFilter ? genre.toLowerCase() : '';
 
   // Filter tracks with lenient matching
   let filteredTracks = extensiveMusicLibrary
     .filter((track) => {
       const matchesQuery =
-        (track.title && track.title.toLowerCase().includes(lowerQuery)) ||
+        (typeof track.title === 'string' && track.title.toLowerCase().includes(lowerQuery)) ||
         track.artist.toLowerCase().includes(lowerQuery) ||
         track.album.toLowerCase().includes(lowerQuery) ||
-        (track.genre && track.genre.toLowerCase().includes(lowerQuery));
+        (typeof track.genre === 'string' && track.genre.toLowerCase().includes(lowerQuery));
 
-      const matchesArtist = !artist || track.artist.toLowerCase().includes(artist.toLowerCase());
-      const matchesGenre = !genre || (track.genre && track.genre.toLowerCase().includes(genre.toLowerCase()));
+      const matchesArtist = hasArtistFilter
+        ? track.artist.toLowerCase().includes(normalizedArtist)
+        : true;
+      const matchesGenre = hasGenreFilter
+        ? (typeof track.genre === 'string' && track.genre.toLowerCase().includes(normalizedGenre))
+        : true;
 
       return matchesQuery && matchesArtist && matchesGenre;
     });
@@ -343,9 +351,11 @@ function searchTracksMock(options: SearchOptions): SearchResults {
   const artists: Artist[] = Array.from(artistMap.values()).map(track => ({
     id: `artist-${track.artist.toLowerCase().replace(/\s+/g, '-')}`,
     name: track.artist,
-    image: track.coverArt || 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400',
+    image: typeof track.coverArt === 'string' && track.coverArt !== ''
+      ? track.coverArt
+      : 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400',
     globalChosenUsers: Math.floor(Math.random() * 1000) + 100, // Mock popularity
-    genre: track.genre || 'Unknown',
+    genre: typeof track.genre === 'string' && track.genre !== '' ? track.genre : 'Unknown',
   })).slice(0, limit);
 
   // If no artists, get all unique artists
@@ -369,7 +379,7 @@ function searchTracksMock(options: SearchOptions): SearchResults {
  */
 export function getTracksByGenre(genre: string, limit = 20): Track[] {
   return extensiveMusicLibrary
-    .filter((track) => track.genre && track.genre.toLowerCase().includes(genre.toLowerCase()))
+    .filter((track) => typeof track.genre === 'string' && track.genre.toLowerCase().includes(genre.toLowerCase()))
     .slice(0, limit);
 }
 
@@ -396,7 +406,7 @@ export function getAllArtists(): string[] {
 export function getAllGenres(): string[] {
   const genres = new Set<string>();
   extensiveMusicLibrary.forEach((track) => {
-    if (track.genre) {
+    if (typeof track.genre === 'string' && track.genre !== '') {
       genres.add(track.genre);
     }
   });

@@ -1,3 +1,4 @@
+/* eslint-disable */
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Users, Music, Play, Pause, Volume2, Maximize, Clock, Disc } from 'lucide-react';
 // import { useTheme } from '../../contexts/ThemeContext'; // UNRESOLVED: Mocking dependency

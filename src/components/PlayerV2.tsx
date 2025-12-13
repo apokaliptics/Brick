@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { useState } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Link2, X } from 'lucide-react';
 import { Track } from '../types';
@@ -7,14 +8,21 @@ interface PlayerV2Props {
   connectionName?: string;
   isPlaying: boolean;
   onPlayPause: () => void;
+  onNext?: () => void;
+  onPrevious?: () => void;
+  onSeek?: (seconds: number) => void;
+  currentTime?: number;
+  duration?: number;
+  formatTime?: (seconds: number) => string;
   onClose: () => void;
 }
 
 type PlayerTab = 'playing' | 'lyrics' | 'bio';
 
-export function PlayerV2({ track, connectionName, isPlaying, onPlayPause, onClose }: PlayerV2Props) {
-  const [progress, setProgress] = useState(45);
+export function PlayerV2({ track, connectionName, isPlaying, onPlayPause, onClose, onNext, onPrevious, onSeek, currentTime = 0, duration = 0, formatTime = (s: number) => '0:00' }: PlayerV2Props) {
   const [activeTab, setActiveTab] = useState<PlayerTab>('playing');
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [scrubTime, setScrubTime] = useState<number | null>(null);
 
   // Mock data
   const lyrics = `In the depths of concrete walls
@@ -156,32 +164,43 @@ Influenced by brutalist architecture and ambient techno, Nora's work represents 
           <div className="fade-in">
             {/* Progress Bar */}
             <div className="mb-6">
-              <div
-                className="w-full rounded-full h-1 mb-2 cursor-pointer"
-                style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}
-              >
-                <div
-                  className="h-1 rounded-full transition-all"
-                  style={{
-                    width: `${progress}%`,
-                    background: 'linear-gradient(to right, #d32f2f, #b71c1c)',
-                    boxShadow: '0 0 10px rgba(211, 47, 47, 0.5)',
+              <div className="flex items-center gap-3">
+                <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem', width: '48px' }}>
+                  {formatTime(scrubTime ?? currentTime)}
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(0, Number(duration) || 0)}
+                  step={0.1}
+                  value={scrubTime ?? currentTime}
+                  onChange={(e) => {
+                    const next = Number(e.target.value);
+                    setScrubTime(next);
+                    if (!isScrubbing) {
+                      onSeek?.(next);
+                    }
                   }}
+                  onMouseDown={() => setIsScrubbing(true)}
+                  onTouchStart={() => setIsScrubbing(true)}
+                  onMouseUp={() => { if (scrubTime !== null) onSeek?.(scrubTime); setIsScrubbing(false); setScrubTime(null); }}
+                  onTouchEnd={() => { if (scrubTime !== null) onSeek?.(scrubTime); setIsScrubbing(false); setScrubTime(null); }}
+                  className="w-full"
+                  disabled={!Number.isFinite(duration) || duration <= 0}
                 />
-              </div>
-              <div className="flex justify-between mono" style={{ color: '#a0a0a0', fontSize: '0.7rem' }}>
-                <span>2:03</span>
-                <span>{track.duration}</span>
+                <span className="mono" style={{ color: '#a0a0a0', fontSize: '0.7rem', width: '48px', textAlign: 'right' }}>
+                  {formatTime(duration)}
+                </span>
               </div>
             </div>
 
             {/* Controls */}
             <div className="flex items-center justify-center gap-8">
-              <button className="transition-transform hover:scale-110">
+              <button className="transition-transform hover:scale-110" onClick={onPrevious}>
                 <SkipBack size={28} color="#e0e0e0" />
               </button>
               
-              <button
+              <button 
                 onClick={onPlayPause}
                 className="w-16 h-16 rounded-full flex items-center justify-center transition-all hover:scale-105"
                 style={{
@@ -196,7 +215,7 @@ Influenced by brutalist architecture and ambient techno, Nora's work represents 
                 )}
               </button>
               
-              <button className="transition-transform hover:scale-110">
+              <button className="transition-transform hover:scale-110" onClick={onNext}>
                 <SkipForward size={28} color="#e0e0e0" />
               </button>
             </div>

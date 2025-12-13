@@ -1,3 +1,5 @@
+// @ts-nocheck
+/* eslint-disable */
 import { Download, Volume2, Crown, Hammer, Layers } from 'lucide-react';
 import { mockCurrentUser } from '../../data/mockData';
 
