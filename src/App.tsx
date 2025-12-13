@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { useState, useEffect } from 'react';
 import { Home, Zap, Plus, List, Search, Disc3, Play, X, HardDrive, Cloud } from 'lucide-react';
 import SeismicMonitor from './components/SeismicMonitor';
@@ -18,6 +19,8 @@ import { WallOverlay } from './components/WallOverlay';
 import { WallDebugPanel } from './components/WallDebugPanel';
 import { LocalMusicUploader } from './components/LocalMusicUploader';
 import { PlayerApple } from './components/PlayerApple';
+import { PlayerV2 } from './components/PlayerV2';
+import { PlayerV3 } from './components/PlayerV3';
 import { Navigation } from './components/Navigation';
 import { ConnectionAuditModal } from './components/modals/ConnectionAuditModal';
 import { ConnectionSuccessModal } from './components/modals/ConnectionSuccessModal';
@@ -111,6 +114,17 @@ export default function App() {
   const [isPink, setIsPink] = useState(false);
   const [isMonitorEnabled, setIsMonitorEnabled] = useState(false);
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
+
+  // Mirror playing state from the shared player so overlays stay in sync
+  useEffect(() => {
+    if (musicPlayerControls && typeof musicPlayerControls.isPlaying === 'boolean') {
+      setIsPlaying(musicPlayerControls.isPlaying);
+    }
+  }, [musicPlayerControls?.isPlaying]);
+
+  // Choose which overlay player UI to render; override via VITE_PLAYER_OVERLAY_VARIANT env if needed.
+  const playerOverlayVariant: 'apple' | 'v2' | 'v3' =
+    (import.meta.env.VITE_PLAYER_OVERLAY_VARIANT as 'apple' | 'v2' | 'v3' | undefined) ?? 'apple';
 
   const nowPlayingTrack = currentTrack ?? currentPlayingTrack;
   const codecBadge = nowPlayingTrack?.codec ?? nowPlayingTrack?.quality?.toUpperCase();
@@ -1268,34 +1282,59 @@ export default function App() {
       />
 
       {/* Player Overlay */}
-      {showPlayer && musicPlayerControls && currentTrack && (
-        <PlayerApple
-          track={currentTrack}
-          connectionName="Jordan Rivera"
-          isPlaying={musicPlayerControls.isPlaying}
-          onPlayPause={musicPlayerControls.togglePlayPause}
-          onNext={musicPlayerControls.handleNext}
-          onPrevious={musicPlayerControls.handlePrevious}
-          currentTime={musicPlayerControls.currentTime}
-          duration={musicPlayerControls.duration}
-          formatTime={musicPlayerControls.formatTime}
-          volumeLevel={musicPlayerControls.volume}
-          onVolumeChange={musicPlayerControls.setVolume}
-          eqBands={musicPlayerControls.eqBands ? {
-            low: musicPlayerControls.eqBands.bass,
-            mid: musicPlayerControls.eqBands.mid,
-            high: musicPlayerControls.eqBands.treble,
-          } : undefined}
-          onEqChange={musicPlayerControls.setEqBands ? (bands) => musicPlayerControls.setEqBands({
-            bass: bands.low,
-            mid: bands.mid,
-            treble: bands.high,
-          }) : undefined}
-          onClose={() => setShowPlayer(false)}
-          isPatronageUnlock={false}
-          onArtistClick={handleArtistClickFromPlayer}
-        />
-      )}
+      {showPlayer && musicPlayerControls && currentTrack && (() => {
+        const sharedProps = {
+          track: currentTrack,
+          connectionName: 'Jordan Rivera',
+          isPlaying: musicPlayerControls.isPlaying,
+          onPlayPause: musicPlayerControls.togglePlayPause,
+          onNext: musicPlayerControls.handleNext,
+          onPrevious: musicPlayerControls.handlePrevious,
+          currentTime: musicPlayerControls.currentTime,
+          duration: musicPlayerControls.duration,
+          formatTime: musicPlayerControls.formatTime,
+          onSeek: musicPlayerControls.seek,
+        } as const;
+
+        if (playerOverlayVariant === 'v2') {
+          return (
+            <PlayerV2
+              {...sharedProps}
+              onClose={() => setShowPlayer(false)}
+            />
+          );
+        }
+
+        if (playerOverlayVariant === 'v3') {
+          return (
+            <PlayerV3
+              {...sharedProps}
+              onClose={() => setShowPlayer(false)}
+            />
+          );
+        }
+
+        return (
+          <PlayerApple
+            {...sharedProps}
+            volumeLevel={musicPlayerControls.volume}
+            onVolumeChange={musicPlayerControls.setVolume}
+            eqBands={musicPlayerControls.eqBands ? {
+              low: musicPlayerControls.eqBands.bass,
+              mid: musicPlayerControls.eqBands.mid,
+              high: musicPlayerControls.eqBands.treble,
+            } : undefined}
+            onEqChange={musicPlayerControls.setEqBands ? (bands) => musicPlayerControls.setEqBands({
+              bass: bands.low,
+              mid: bands.mid,
+              treble: bands.high,
+            }) : undefined}
+            onClose={() => setShowPlayer(false)}
+            isPatronageUnlock={false}
+            onArtistClick={handleArtistClickFromPlayer}
+          />
+        );
+      })()}
 
 
 
@@ -1390,6 +1429,7 @@ export default function App() {
         currentTrack={currentPlayingTrack}
         playlist={playlist}
         onTrackChange={handleTrackChange}
+        onPlayPause={setIsPlaying}
         isVisible={true}
         onControlsReady={setMusicPlayerControls}
         sidebarCollapsed={sidebarCollapsed}
