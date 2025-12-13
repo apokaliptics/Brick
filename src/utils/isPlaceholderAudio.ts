@@ -1,22 +1,39 @@
 export function isPlaceholderAudioUrl(url?: string | null): boolean {
-  if (!url || typeof url !== 'string') return true;
+  if (typeof url !== 'string') return true;
+  if (url.trim() === '') return true;
+
   try {
     const u = new URL(url);
+    const protocol = u.protocol.toLowerCase();
+    // Local and app-specific schemes should be treated as playable, not placeholders
+    if (protocol === 'file:' || protocol === 'tauri:' || protocol === 'app:' || protocol === 'capacitor:' || protocol === 'native:') {
+      return false;
+    }
     const host = u.hostname.toLowerCase();
     // Common demo/example placeholder domains and hostnames used in the repo
     const placeholderHosts = ['soundhelix.com', 'placehold.co', 'placekitten.com', 'example.com'];
     return placeholderHosts.some(h => host.includes(h));
   } catch (e) {
-    // If URL constructor fails (maybe it's a blob URL) treat as not placeholder
-    if (typeof url === 'string' && url.startsWith('blob:')) return false;
-    return true; // non-HTTP-ish URLs should be treated as not playable by default
+    // If URL parsing fails (likely a local filesystem path or blob), treat as playable unless blob is explicitly empty
+    if (url.startsWith('blob:')) return false;
+    // Windows/Unix local paths should be considered playable
+    if (/^[a-zA-Z]:[\\/]/.test(url) || url.startsWith('/')) return false;
+    return false;
   }
 }
 
-export function isPlayableTrack(t: any): boolean {
-  if (!t) return false;
-  if (t.previewAvailable === true) return true;
-  const url = t.audioUrl || t.downloadUrl || t.previewUrl;
-  if (!url) return false;
+type TrackLike = {
+  previewAvailable?: boolean;
+  audioUrl?: string | null;
+  downloadUrl?: string | null;
+  previewUrl?: string | null;
+};
+
+export function isPlayableTrack(t: unknown): boolean {
+  if (t === null || t === undefined || typeof t !== 'object') return false;
+  const track = t as TrackLike;
+  if (track.previewAvailable === true) return true;
+  const url = track.audioUrl ?? track.downloadUrl ?? track.previewUrl;
+  if (url === undefined || url === null || url === '') return false;
   return !isPlaceholderAudioUrl(url);
 }
